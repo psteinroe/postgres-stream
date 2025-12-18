@@ -126,10 +126,10 @@ sink:
 
 ```bash
 # Start the daemon
-pgstream
+postgres-stream
 
 # Or with Docker
-docker run -v $(pwd)/config.yaml:/config.yaml pgstream
+docker run -v $(pwd)/config.yaml:/config.yaml postgres-stream
 ```
 
 ### 4. Create Subscriptions

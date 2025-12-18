@@ -37,8 +37,8 @@ COPY . .
 # Set sqlx to offline mode (migrations are in separate SQL files)
 ENV SQLX_OFFLINE=true
 
-RUN cargo build --release --bin pgstream && \
-    strip target/release/pgstream
+RUN cargo build --release --bin postgres-stream && \
+    strip target/release/postgres-stream
 
 # Runtime stage with distroless for security
 FROM gcr.io/distroless/cc-debian12:nonroot
@@ -48,11 +48,8 @@ WORKDIR /app
 USER nonroot:nonroot
 
 # Copy binary
-COPY --from=builder /app/target/release/pgstream ./pgstream
-
-# Copy migration files (needed at runtime)
-COPY --from=builder /app/migrations ./migrations
+COPY --from=builder /app/target/release/postgres-stream ./postgres-stream
 
 # Use exec form for proper signal handling
-ENTRYPOINT ["./pgstream"]
+ENTRYPOINT ["./postgres-stream"]
 

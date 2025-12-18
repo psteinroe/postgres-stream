@@ -1567,41 +1567,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "pgstream"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "chrono",
- "const-oid",
- "etl",
- "etl-config",
- "etl-postgres",
- "futures",
- "metrics",
- "metrics-exporter-prometheus",
- "pin-project-lite",
- "ring",
- "rustls",
- "rustls-pemfile",
- "secrecy",
- "serde",
- "serde_json",
- "serde_yaml",
- "sqlx",
- "testcontainers",
- "testcontainers-modules",
- "tikv-jemalloc-ctl",
- "tikv-jemallocator",
- "tokio",
- "tokio-postgres",
- "tokio-rustls",
- "tracing",
- "tracing-subscriber",
- "uuid",
- "x509-cert",
-]
-
-[[package]]
 name = "phf"
 version = "0.11.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1718,6 +1683,41 @@ dependencies = [
  "postgres-protocol",
  "postgres-types",
  "tokio-postgres",
+]
+
+[[package]]
+name = "postgres-stream"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "const-oid",
+ "etl",
+ "etl-config",
+ "etl-postgres",
+ "futures",
+ "metrics",
+ "metrics-exporter-prometheus",
+ "pin-project-lite",
+ "ring",
+ "rustls",
+ "rustls-pemfile",
+ "secrecy",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "sqlx",
+ "testcontainers",
+ "testcontainers-modules",
+ "tikv-jemalloc-ctl",
+ "tikv-jemallocator",
+ "tokio",
+ "tokio-postgres",
+ "tokio-rustls",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
+ "x509-cert",
 ]
 
 [[package]]

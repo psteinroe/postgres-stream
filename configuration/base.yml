@@ -1,4 +1,4 @@
-# Base configuration for pgstream daemon
+# Base configuration for daemon
 # This file contains default settings that apply to all environments
 
 stream:

@@ -1,7 +1,7 @@
 use etl_config::shared::{IntoConnectOptions, PgConnectionConfig};
 use sqlx::{
-    postgres::{PgConnectOptions, PgPoolOptions},
     Executor,
+    postgres::{PgConnectOptions, PgPoolOptions},
 };
 use tracing::info;
 

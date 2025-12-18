@@ -11,7 +11,7 @@ use crate::{
 use etl::error::EtlResult;
 use etl::pipeline::Pipeline;
 use etl::store::both::postgres::PostgresStore;
-use tokio::signal::unix::{signal, SignalKind};
+use tokio::signal::unix::{SignalKind, signal};
 use tracing::{debug, info, warn};
 
 /// Starts the pipeline daemon with the provided configuration.

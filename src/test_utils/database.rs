@@ -5,7 +5,7 @@ use etl_config::shared::{IntoConnectOptions, PgConnectionConfig};
 use sqlx::{Connection, Executor, PgConnection, PgPool, postgres::PgPoolOptions};
 use tokio::runtime::Handle;
 
-use crate::migrations::{migrate_pgstream, migrate_etl};
+use crate::migrations::{migrate_etl, migrate_pgstream};
 use crate::test_utils::test_pg_config;
 
 /// Test database wrapper with automatic cleanup on drop.
