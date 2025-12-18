@@ -1,0 +1,528 @@
+use chrono::{DateTime, NaiveDate, Utc};
+use etl::{
+    error::{ErrorKind, EtlResult},
+    etl_error,
+    store::schema::SchemaStore,
+};
+use tracing::info;
+
+use crate::{
+    config::{EVENTS_TABLE, SCHEMA_NAME},
+    metrics,
+    store::StreamStore,
+};
+
+/// Domain representation of a partition with its date-based metadata.
+#[derive(Debug, Clone)]
+pub struct PartitionInfo {
+    pub name: String,
+    pub date: NaiveDate,
+}
+
+impl PartitionInfo {
+    /// Parse partition name to extract date information.
+    pub fn from_name(name: String) -> EtlResult<Self> {
+        let date = Self::parse_date(&name)?;
+        Ok(Self { name, date })
+    }
+
+    /// Create partition info for a specific date.
+    #[must_use]
+    pub fn for_date(base_table: &str, date: NaiveDate) -> Self {
+        Self {
+            name: Self::format_name(base_table, date),
+            date,
+        }
+    }
+
+    /// Get SQL range bounds for this daily partition.
+    #[must_use]
+    pub fn range_bounds(&self) -> (String, String) {
+        let start = self.date.format("%Y-%m-%d").to_string();
+        let end = (self.date + chrono::Duration::days(1))
+            .format("%Y-%m-%d")
+            .to_string();
+        (start, end)
+    }
+
+    fn parse_date(partition_name: &str) -> EtlResult<NaiveDate> {
+        let date_str = partition_name
+            .rsplit('_')
+            .next()
+            .ok_or_else(|| etl_error!(ErrorKind::ConversionError, "Invalid partition name"))?;
+
+        NaiveDate::parse_from_str(date_str, "%Y%m%d")
+            .map_err(|e| etl_error!(ErrorKind::ConversionError, "Failed to parse date: {}", e))
+    }
+
+    fn format_name(base_table: &str, date: NaiveDate) -> String {
+        format!("{}_{}", base_table, date.format("%Y%m%d"))
+    }
+}
+
+/// Retention policy for managing partition lifecycle.
+#[derive(Debug, Clone)]
+pub struct RetentionPolicy {
+    pub retention_days: u32,
+}
+
+impl RetentionPolicy {
+    #[must_use]
+    pub fn new(retention_days: u32) -> Self {
+        Self { retention_days }
+    }
+
+    #[must_use]
+    pub fn plan_maintenance(
+        &self,
+        partitions: Vec<PartitionInfo>,
+        table_name: &str,
+        days_ahead: u32,
+        now: DateTime<Utc>,
+    ) -> (Vec<PartitionInfo>, Vec<PartitionInfo>) {
+        let cutoff = (now - chrono::Duration::days(self.retention_days as i64)).date_naive();
+        let today = now.date_naive();
+
+        let mut to_drop = Vec::new();
+        let mut existing_dates = Vec::new();
+
+        for partition in partitions {
+            if partition.date < cutoff {
+                to_drop.push(partition);
+            } else {
+                existing_dates.push(partition.date);
+            }
+        }
+
+        let mut to_create = Vec::new();
+        for days in 0..days_ahead {
+            let target_date = today + chrono::Duration::days(days as i64);
+            if !existing_dates.contains(&target_date) {
+                to_create.push(PartitionInfo::for_date(table_name, target_date));
+            }
+        }
+
+        (to_drop, to_create)
+    }
+}
+
+/// Background maintenance task
+///
+/// - Drops partitions older than retention period
+/// - Creates partitions for upcoming days
+pub async fn run_maintenance<S: SchemaStore>(store: &StreamStore<S>) -> EtlResult<DateTime<Utc>> {
+    let start = Utc::now();
+    let stream_id = store.stream_id();
+
+    let result = async {
+        let existing_partitions = store.load_partitions(SCHEMA_NAME, EVENTS_TABLE).await?;
+
+        let policy = RetentionPolicy::new(7);
+        let (to_drop, to_create) =
+            policy.plan_maintenance(existing_partitions, EVENTS_TABLE, 3, start);
+
+        for partition in to_drop {
+            info!("Dropping partition: {}", partition.name);
+            store.delete_partition(SCHEMA_NAME, &partition.name).await?;
+        }
+
+        for partition in to_create {
+            info!("Creating partition: {}", partition.name);
+            store
+                .create_partition(SCHEMA_NAME, EVENTS_TABLE, &partition)
+                .await?;
+        }
+
+        EtlResult::Ok(start)
+    }
+    .await;
+
+    let duration_milliseconds = (Utc::now() - start).num_milliseconds() as f64;
+
+    match result {
+        Ok(timestamp) => {
+            metrics::record_maintenance_run(stream_id, duration_milliseconds, true);
+            Ok(timestamp)
+        }
+        Err(e) => {
+            metrics::record_maintenance_run(stream_id, duration_milliseconds, false);
+            Err(e)
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::TimeZone;
+
+    #[test]
+    fn test_partition_info_from_name_valid() {
+        let result = PartitionInfo::from_name("events_20240315".to_string()).unwrap();
+        assert_eq!(result.name, "events_20240315");
+        assert_eq!(result.date, NaiveDate::from_ymd_opt(2024, 3, 15).unwrap());
+    }
+
+    #[test]
+    fn test_partition_info_from_name_invalid() {
+        let result = PartitionInfo::from_name("events_invalid".to_string());
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_partition_info_from_name_missing_suffix() {
+        let result = PartitionInfo::from_name("events".to_string());
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_partition_info_for_date() {
+        let date = NaiveDate::from_ymd_opt(2024, 3, 15).unwrap();
+        let partition = PartitionInfo::for_date("events", date);
+
+        assert_eq!(partition.name, "events_20240315");
+        assert_eq!(partition.date, date);
+    }
+
+    #[test]
+    fn test_partition_info_range_bounds() {
+        let date = NaiveDate::from_ymd_opt(2024, 3, 15).unwrap();
+        let partition = PartitionInfo::for_date("events", date);
+
+        let (start, end) = partition.range_bounds();
+        assert_eq!(start, "2024-03-15");
+        assert_eq!(end, "2024-03-16");
+    }
+
+    #[test]
+    fn test_retention_policy_plan_maintenance_drop_old() {
+        let policy = RetentionPolicy::new(7);
+        let now = Utc.with_ymd_and_hms(2024, 3, 15, 12, 0, 0).unwrap();
+
+        // Partitions: one old (should drop), one current, one future
+        let partitions = vec![
+            PartitionInfo::for_date("events", NaiveDate::from_ymd_opt(2024, 3, 1).unwrap()), // 14 days old
+            PartitionInfo::for_date("events", NaiveDate::from_ymd_opt(2024, 3, 15).unwrap()), // today
+            PartitionInfo::for_date("events", NaiveDate::from_ymd_opt(2024, 3, 16).unwrap()), // tomorrow
+        ];
+
+        let (to_drop, _to_create) = policy.plan_maintenance(partitions, "events", 3, now);
+
+        assert_eq!(to_drop.len(), 1);
+        assert_eq!(
+            to_drop.first().expect("first element exists").date,
+            NaiveDate::from_ymd_opt(2024, 3, 1).unwrap()
+        );
+    }
+
+    #[test]
+    fn test_retention_policy_plan_maintenance_create_future() {
+        let policy = RetentionPolicy::new(7);
+        let now = Utc.with_ymd_and_hms(2024, 3, 15, 12, 0, 0).unwrap();
+
+        // Only today exists, should create 2 more (tomorrow and day after)
+        let partitions = vec![PartitionInfo::for_date(
+            "events",
+            NaiveDate::from_ymd_opt(2024, 3, 15).unwrap(),
+        )];
+
+        let (to_drop, to_create) = policy.plan_maintenance(partitions, "events", 3, now);
+
+        assert_eq!(to_drop.len(), 0);
+        assert_eq!(to_create.len(), 2);
+        assert_eq!(
+            to_create.first().expect("first element exists").date,
+            NaiveDate::from_ymd_opt(2024, 3, 16).unwrap()
+        );
+        assert_eq!(
+            to_create.get(1).expect("second element exists").date,
+            NaiveDate::from_ymd_opt(2024, 3, 17).unwrap()
+        );
+    }
+
+    #[test]
+    fn test_retention_policy_plan_maintenance_no_changes_needed() {
+        let policy = RetentionPolicy::new(7);
+        let now = Utc.with_ymd_and_hms(2024, 3, 15, 12, 0, 0).unwrap();
+
+        // All partitions already exist
+        let partitions = vec![
+            PartitionInfo::for_date("events", NaiveDate::from_ymd_opt(2024, 3, 15).unwrap()),
+            PartitionInfo::for_date("events", NaiveDate::from_ymd_opt(2024, 3, 16).unwrap()),
+            PartitionInfo::for_date("events", NaiveDate::from_ymd_opt(2024, 3, 17).unwrap()),
+        ];
+
+        let (to_drop, to_create) = policy.plan_maintenance(partitions, "events", 3, now);
+
+        assert_eq!(to_drop.len(), 0);
+        assert_eq!(to_create.len(), 0);
+    }
+
+    #[test]
+    fn test_retention_policy_plan_maintenance_at_retention_boundary() {
+        let policy = RetentionPolicy::new(7);
+        let now = Utc.with_ymd_and_hms(2024, 3, 15, 12, 0, 0).unwrap();
+
+        // Partition exactly at cutoff (7 days old) should be kept
+        let partitions = vec![
+            PartitionInfo::for_date("events", NaiveDate::from_ymd_opt(2024, 3, 8).unwrap()), // exactly 7 days old
+            PartitionInfo::for_date("events", NaiveDate::from_ymd_opt(2024, 3, 7).unwrap()), // 8 days old - should drop
+        ];
+
+        let (to_drop, _to_create) = policy.plan_maintenance(partitions, "events", 1, now);
+
+        assert_eq!(to_drop.len(), 1);
+        assert_eq!(
+            to_drop.first().expect("first element exists").date,
+            NaiveDate::from_ymd_opt(2024, 3, 7).unwrap()
+        );
+    }
+
+    #[test]
+    fn test_retention_policy_combined_drop_and_create() {
+        let policy = RetentionPolicy::new(7);
+        let now = Utc.with_ymd_and_hms(2024, 3, 15, 12, 0, 0).unwrap();
+
+        let partitions = vec![
+            PartitionInfo::for_date("events", NaiveDate::from_ymd_opt(2024, 3, 1).unwrap()), // old - drop
+            PartitionInfo::for_date("events", NaiveDate::from_ymd_opt(2024, 3, 15).unwrap()), // today - keep
+        ];
+
+        let (to_drop, to_create) = policy.plan_maintenance(partitions, "events", 3, now);
+
+        assert_eq!(to_drop.len(), 1);
+        assert_eq!(to_create.len(), 2); // tomorrow and day after
+    }
+
+    // Integration tests
+
+    use chrono::Duration;
+    use etl::store::both::postgres::PostgresStore;
+
+    use crate::config::StreamConfig;
+    use crate::sink::memory::MemorySink;
+    use crate::store::StreamStore;
+    use crate::stream::PgStream;
+    use crate::test_utils::{TestDatabase, create_postgres_store};
+
+    fn test_stream_config(db: &TestDatabase) -> StreamConfig {
+        StreamConfig {
+            id: 1,
+            pg_connection: db.config.clone(),
+            batch: etl::config::BatchConfig {
+                max_size: 100,
+                max_fill_ms: 1000,
+            },
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_initial_partitions_created() {
+        let db = TestDatabase::spawn().await;
+        let config = test_stream_config(&db);
+        let sink = MemorySink::new();
+        let store = create_postgres_store(config.id, &db.config, &db.pool).await;
+
+        // Create PgStream - should create initial partitions
+        let _stream: PgStream<MemorySink, PostgresStore> =
+            PgStream::create(config, sink, store).await.unwrap();
+
+        // Check that partitions exist (today + 2 days ahead = 3 partitions)
+        let count: (i64,) = sqlx::query_as(
+            "select count(*) from pg_tables
+             where schemaname = 'pgstream'
+             and tablename like 'events_%'",
+        )
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+
+        assert_eq!(count.0, 3, "Should create 3 initial partitions");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_maintenance_creates_future_partitions() {
+        let db = TestDatabase::spawn().await;
+        let config = test_stream_config(&db);
+        let sink = MemorySink::new();
+        let store = create_postgres_store(config.id, &db.config, &db.pool).await;
+
+        let _stream: PgStream<MemorySink, PostgresStore> =
+            PgStream::create(config, sink, store.clone()).await.unwrap();
+
+        // Manually delete all partitions except today
+        sqlx::query(
+            "do $$
+            declare
+                partition_name text;
+            begin
+                for partition_name in
+                    select tablename from pg_tables
+                    where schemaname = 'pgstream'
+                    and tablename like 'events_%'
+                    and tablename != concat('events_', to_char(now(), 'YYYYMMDD'))
+                loop
+                    execute 'drop table if exists pgstream.' || partition_name;
+                end loop;
+            end $$;",
+        )
+        .execute(&db.pool)
+        .await
+        .unwrap();
+
+        // Verify only 1 partition exists
+        let count_before: (i64,) = sqlx::query_as(
+            "select count(*) from pg_tables
+             where schemaname = 'pgstream'
+             and tablename like 'events_%'",
+        )
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+        assert_eq!(count_before.0, 1);
+
+        // Run maintenance manually
+        let stream_store = StreamStore::create(test_stream_config(&db), store.clone())
+            .await
+            .unwrap();
+        run_maintenance(&stream_store).await.unwrap();
+
+        // Should now have 3 partitions again
+        let count_after: (i64,) = sqlx::query_as(
+            "select count(*) from pg_tables
+             where schemaname = 'pgstream'
+             and tablename like 'events_%'",
+        )
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+        assert_eq!(count_after.0, 3);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_maintenance_drops_old_partitions() {
+        let db = TestDatabase::spawn().await;
+        let config = test_stream_config(&db);
+        let sink = MemorySink::new();
+        let store = create_postgres_store(config.id, &db.config, &db.pool).await;
+
+        let _stream: PgStream<MemorySink, PostgresStore> =
+            PgStream::create(config, sink, store.clone()).await.unwrap();
+
+        // Create an old partition (10 days ago - beyond 7 day retention)
+        let old_date = Utc::now() - Duration::days(10);
+        let old_partition_name = format!("events_{}", old_date.format("%Y%m%d"));
+        sqlx::query(&format!(
+            "create table pgstream.{} partition of pgstream.events
+             for values from ('{}') to ('{}')",
+            old_partition_name,
+            old_date.format("%Y-%m-%d"),
+            (old_date + Duration::days(1)).format("%Y-%m-%d")
+        ))
+        .execute(&db.pool)
+        .await
+        .unwrap();
+
+        // Verify old partition exists
+        let exists_before: (bool,) = sqlx::query_as(&format!(
+            "select exists(
+                select 1 from pg_tables
+                where schemaname = 'pgstream'
+                and tablename = '{old_partition_name}'
+            )"
+        ))
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+        assert!(exists_before.0);
+
+        // Run maintenance
+        let stream_store = StreamStore::create(test_stream_config(&db), store.clone())
+            .await
+            .unwrap();
+        run_maintenance(&stream_store).await.unwrap();
+
+        // Old partition should be dropped
+        let exists_after: (bool,) = sqlx::query_as(&format!(
+            "select exists(
+                select 1 from pg_tables
+                where schemaname = 'pgstream'
+                and tablename = '{old_partition_name}'
+            )"
+        ))
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+        assert!(!exists_after.0);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_maintenance_updates_next_maintenance_at() {
+        let db = TestDatabase::spawn().await;
+        let config = test_stream_config(&db);
+        let sink = MemorySink::new();
+        let store = create_postgres_store(config.id, &db.config, &db.pool).await;
+
+        let _stream: PgStream<MemorySink, PostgresStore> =
+            PgStream::create(config, sink, store.clone()).await.unwrap();
+
+        // Get initial next_maintenance_at
+        let stream_store = StreamStore::create(test_stream_config(&db), store.clone())
+            .await
+            .unwrap();
+        let (_status, next_before) = stream_store.get_stream_state().await.unwrap();
+
+        // Run maintenance
+        let completed_at = run_maintenance(&stream_store).await.unwrap();
+
+        // Update the next maintenance time
+        let next_after = next_before + Duration::hours(24);
+        stream_store
+            .store_next_maintenance_at(next_after)
+            .await
+            .unwrap();
+
+        // Verify next_maintenance_at was updated
+        let (_status_after, next_after_stored) = stream_store.get_stream_state().await.unwrap();
+
+        assert!(
+            next_after_stored > next_before,
+            "next_maintenance_at should be updated"
+        );
+        assert!(
+            completed_at <= next_after_stored,
+            "next run should be scheduled after completion"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_maintenance_idempotent() {
+        let db = TestDatabase::spawn().await;
+        let config = test_stream_config(&db);
+        let sink = MemorySink::new();
+        let store = create_postgres_store(config.id, &db.config, &db.pool).await;
+
+        let _stream: PgStream<MemorySink, PostgresStore> =
+            PgStream::create(config, sink, store.clone()).await.unwrap();
+
+        let stream_store = StreamStore::create(test_stream_config(&db), store.clone())
+            .await
+            .unwrap();
+
+        // Run maintenance twice
+        run_maintenance(&stream_store).await.unwrap();
+        run_maintenance(&stream_store).await.unwrap();
+
+        // Should still have the expected number of partitions
+        let count: (i64,) = sqlx::query_as(
+            "select count(*) from pg_tables
+             where schemaname = 'pgstream'
+             and tablename like 'events_%'",
+        )
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+
+        assert_eq!(count.0, 3, "Running maintenance twice should be idempotent");
+    }
+}

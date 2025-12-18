@@ -1,0 +1,128 @@
+name: Pull Request
+
+on:
+  workflow_dispatch:
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  RUST_LOG: info
+  RUST_BACKTRACE: 1
+
+jobs:
+  format:
+    name: Format
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout PR branch
+        uses: actions/checkout@v4
+
+      - name: Install toolchain
+        uses: moonrepo/setup-rust@v1
+        with:
+          components: rustfmt
+          bins: taplo-cli
+          cache-base: main
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Run cargo fmt
+        run: cargo fmt --all --check
+
+      - name: Run taplo format
+        run: taplo format --check
+
+  actionlint:
+    name: Lint GitHub Actions
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download actionlint
+        id: get_actionlint
+        run: bash <(curl https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bash)
+        shell: bash
+
+      - name: Check workflow files
+        run: ${{ steps.get_actionlint.outputs.executable }} -color
+        shell: bash
+
+  lint:
+    name: Lint Project
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout PR Branch
+        uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - name: Install toolchain
+        uses: moonrepo/setup-rust@v1
+        with:
+          components: clippy
+          cache-base: main
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Run clippy
+        run: cargo clippy --all-targets --all-features --fix -- -D warnings
+
+      - name: Check for changes
+        run: |
+          if [[ $(git status --porcelain) ]]; then
+            git status
+            git diff
+            exit 1
+          fi
+
+  test:
+    name: Test (Postgres ${{ matrix.pg }})
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        pg: [15, 16, 17]
+
+    steps:
+      - name: Start PostgreSQL with logical replication
+        run: |
+          docker run -d \
+            --name postgres \
+            -e POSTGRES_USER=postgres \
+            -e POSTGRES_PASSWORD=postgres \
+            -e POSTGRES_DB=testdb \
+            -p 5432:5432 \
+            --health-cmd "pg_isready -U postgres -d testdb" \
+            --health-interval 2s \
+            --health-timeout 5s \
+            --health-retries 5 \
+            postgres:${{ matrix.pg }} \
+            postgres \
+            -c wal_level=logical \
+            -c max_wal_senders=10 \
+            -c max_replication_slots=10
+
+          # Wait for postgres to be ready
+          until docker exec postgres pg_isready -U postgres -d testdb; do
+            echo "Waiting for postgres..."
+            sleep 1
+          done
+
+      - name: Checkout PR branch
+        uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - name: Install toolchain
+        uses: moonrepo/setup-rust@v1
+        with:
+          cache-base: main
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Run tests
+        run: cargo test
+

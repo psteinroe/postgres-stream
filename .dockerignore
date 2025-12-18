@@ -1,0 +1,41 @@
+# Rust build artifacts
+target/
+**/*.rs.bk
+**/*.pdb
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Git
+.git/
+.gitignore
+
+# Documentation
+*.md
+docs/
+DESIGN.md
+
+# Test artifacts
+tests/
+test-results/
+
+# CI/CD
+.github/
+
+# Local development
+.env
+.env.*
+*.log
+
+# Cargo cache
+.cargo/registry/
+.cargo/git/
+
+# Keep these for build
+!.cargo/config.toml
+!migrations/

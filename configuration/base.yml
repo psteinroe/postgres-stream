@@ -1,0 +1,20 @@
+# Base configuration for pgstream daemon
+# This file contains default settings that apply to all environments
+
+stream:
+  id: 1
+  pg_connection:
+    host: "localhost"
+    port: 5432
+    name: "postgres"
+    username: "postgres"
+    tls:
+      enabled: false
+      trusted_root_certs: ""
+  batch:
+    max_size: 10000
+    max_fill_ms: 1000
+
+sink:
+  type: memory
+
