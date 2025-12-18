@@ -19,13 +19,13 @@ flowchart LR
     D -->|streams| E[daemon<br/>binary]
     E -->|delivers| F[sink<br/>queue/http]
 
-    style Postgres fill:#e1f5ff,stroke:#0066cc,stroke-width:2px
-    style A fill:#fff,stroke:#333,stroke-width:1px
-    style B fill:#fff,stroke:#333,stroke-width:1px
-    style C fill:#fff,stroke:#333,stroke-width:1px
-    style D fill:#fff,stroke:#333,stroke-width:1px
-    style E fill:#ffe1e1,stroke:#cc0000,stroke-width:2px
-    style F fill:#e1ffe1,stroke:#00cc00,stroke-width:2px
+    style Postgres fill:#dbeafe,stroke:#2563eb,stroke-width:3px
+    style A fill:#f3e8ff,stroke:#9333ea,stroke-width:2px,color:#581c87
+    style B fill:#fed7aa,stroke:#ea580c,stroke-width:2px,color:#7c2d12
+    style C fill:#bfdbfe,stroke:#2563eb,stroke-width:2px,color:#1e40af
+    style D fill:#99f6e4,stroke:#14b8a6,stroke-width:2px,color:#115e59
+    style E fill:#fecdd3,stroke:#e11d48,stroke-width:3px,color:#881337
+    style F fill:#bbf7d0,stroke:#16a34a,stroke-width:3px,color:#14532d
 ```
 
 <details>
