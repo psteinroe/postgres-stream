@@ -16,9 +16,6 @@ const STREAM_FAILOVER_RECOVERED_TOTAL: &str = "stream_failover_recovered_total";
 /// Metric name for recording the time spent in failover mode.
 const STREAM_FAILOVER_DURATION_SECONDS: &str = "stream_failover_duration_seconds";
 
-/// Metric name for tracking the age of the checkpoint event being retried during failover.
-const STREAM_FAILOVER_CHECKPOINT_AGE_SECONDS: &str = "stream_failover_checkpoint_age_seconds";
-
 /// Label key for stream identifier.
 const STREAM_ID_LABEL: &str = "stream_id";
 
@@ -43,11 +40,6 @@ pub(crate) fn register_failover_metrics() {
         STREAM_FAILOVER_DURATION_SECONDS,
         Unit::Seconds,
         "Time spent in failover mode before recovery"
-    );
-    describe_gauge!(
-        STREAM_FAILOVER_CHECKPOINT_AGE_SECONDS,
-        Unit::Seconds,
-        "Age of the checkpoint event currently being retried during failover"
     );
 }
 
@@ -82,13 +74,4 @@ pub fn record_failover_recovered(stream_id: u64, duration_seconds: f64) {
         STREAM_ID_LABEL => stream_id.to_string()
     )
     .record(duration_seconds);
-}
-
-/// Records the age of the checkpoint event during failover.
-pub fn record_checkpoint_age(stream_id: u64, age_seconds: f64) {
-    gauge!(
-        STREAM_FAILOVER_CHECKPOINT_AGE_SECONDS,
-        STREAM_ID_LABEL => stream_id.to_string()
-    )
-    .set(age_seconds);
 }

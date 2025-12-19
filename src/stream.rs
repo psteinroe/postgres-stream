@@ -8,6 +8,7 @@ use etl::{
 };
 use futures::StreamExt;
 use tokio::pin;
+use tracing::info;
 
 use crate::{
     concurrency::TimeoutBatchStream,
@@ -91,8 +92,14 @@ where
             None => return Ok(()),
         };
 
+        let last_event_timestamp = events.last().map(|e| e.id.created_at);
+
         let result = self.sink.publish_events(events).await;
         if result.is_err() {
+            info!(
+                "Publishing events failed, entering failover at checkpoint event id: {:?}",
+                checkpoint_id
+            );
             metrics::record_failover_entered(self.config.id);
             self.store
                 .store_stream_status(StreamStatus::Failover {
@@ -100,6 +107,12 @@ where
                 })
                 .await?;
             return Ok(());
+        }
+
+        // Record processing lag based on the last event's timestamp
+        if let Some(timestamp) = last_event_timestamp {
+            let lag_seconds = (Utc::now() - timestamp).num_seconds() as f64;
+            metrics::record_processing_lag(self.config.id, lag_seconds);
         }
 
         Ok(())
@@ -112,10 +125,9 @@ where
             // Schedule next run 24h after the SCHEDULED time, not execution time
             let next_run = next_maintenance_at + chrono::Duration::hours(24);
             self.store.store_next_maintenance_at(next_run).await?;
-            tracing::info!(
+            info!(
                 "Maintenance completed at {}, next scheduled: {}",
-                completed_at,
-                next_run
+                completed_at, next_run
             );
         }
 
@@ -125,7 +137,7 @@ where
                 let store = self.store.clone();
 
                 tokio::spawn(async move {
-                    tracing::info!("Starting background maintenance task");
+                    info!("Starting background maintenance task");
                     match run_maintenance(&store).await {
                         Ok(ts) => {
                             let _ = tx.send(ts);
@@ -139,7 +151,7 @@ where
                 });
             } else {
                 // Task already running, skip
-                tracing::debug!("Maintenance already running, skipping");
+                info!("Maintenance already running, skipping");
             }
         }
 
@@ -155,10 +167,9 @@ where
 
         let checkpoint_event = self.store.get_checkpoint_event(checkpoint_event_id).await?;
 
-        // Record checkpoint age
-        let checkpoint_age_seconds =
-            (Utc::now() - checkpoint_event.id.created_at).num_seconds() as f64;
-        metrics::record_checkpoint_age(self.config.id, checkpoint_age_seconds);
+        // Record processing lag for checkpoint event
+        let lag_seconds = (Utc::now() - checkpoint_event.id.created_at).num_seconds() as f64;
+        metrics::record_processing_lag(self.config.id, lag_seconds);
 
         let result = self
             .sink
@@ -168,6 +179,11 @@ where
         if result.is_err() {
             return Ok(());
         }
+
+        info!(
+            "Sink recovered, starting failover replay from checkpoint event id: {:?}",
+            checkpoint_event.id
+        );
 
         let failover =
             FailoverClient::connect(self.config.id, self.config.pg_connection.clone()).await?;
@@ -187,9 +203,15 @@ where
 
             let table_rows = table_rows.into_iter().collect::<Result<Vec<_>, _>>()?;
             let events = convert_events_from_table_rows(table_rows, &table_schema.column_schemas)?;
+
             let last_event_id = events.last().unwrap().id.clone();
+            let last_event_timestamp = events.last().unwrap().id.created_at;
 
             self.sink.publish_events(events).await?;
+
+            // Record processing lag during failover replay
+            let lag_seconds = (Utc::now() - last_event_timestamp).num_seconds() as f64;
+            metrics::record_processing_lag(self.config.id, lag_seconds);
 
             failover.update_checkpoint(&last_event_id).await?;
         }
@@ -201,6 +223,9 @@ where
         self.store
             .store_stream_status(StreamStatus::Healthy)
             .await?;
+
+        info!("Failover recovery completed");
+
         Ok(())
     }
 }

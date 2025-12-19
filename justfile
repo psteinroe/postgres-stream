@@ -3,6 +3,7 @@ _default:
 
 alias r := ready
 alias qc := quick-commit
+alias rg := reset-git
 
 # Installs the tools needed to develop
 install-tools:
