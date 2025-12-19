@@ -1,12 +1,10 @@
 //! Configuration management for pgstream daemon.
 //!
-//! Loads configuration from YAML files and environment variables,
-//! following the etl-config pattern.
+//! Loads configuration from YAML files and environment variables.
 
-use etl_config::Config;
 use serde::Deserialize;
 
-use crate::config::{SinkConfig, StreamConfig};
+use crate::config::{SinkConfig, StreamConfig, load::Config};
 
 /// Configuration for the pipeline.
 ///

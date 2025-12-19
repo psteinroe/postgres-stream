@@ -1,4 +1,4 @@
-use etl_config::shared::{IntoConnectOptions, PgConnectionConfig};
+use etl::config::{IntoConnectOptions, PgConnectionConfig};
 use sqlx::{
     Executor,
     postgres::{PgConnectOptions, PgPoolOptions},

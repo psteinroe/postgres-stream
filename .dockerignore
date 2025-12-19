@@ -39,3 +39,4 @@ test-results/
 # Keep these for build
 !.cargo/config.toml
 !migrations/
+!configuration/

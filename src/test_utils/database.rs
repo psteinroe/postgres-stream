@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use chrono::{Days, NaiveDate, Utc};
-use etl_config::shared::{IntoConnectOptions, PgConnectionConfig};
+use etl::config::{IntoConnectOptions, PgConnectionConfig};
 use sqlx::{Connection, Executor, PgConnection, PgPool, postgres::PgPoolOptions};
 use tokio::runtime::Handle;
 

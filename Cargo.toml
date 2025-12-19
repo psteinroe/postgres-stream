@@ -10,6 +10,7 @@ test-utils = ["dep:testcontainers", "dep:testcontainers-modules"]
 [dependencies]
 anyhow = { version = "1.0.98", default-features = false, features = ["std"] }
 chrono = { version = "0.4.41", default-features = false }
+config = { version = "0.14", default-features = false, features = ["yaml", "json"] }
 const-oid = { version = "0.9.6", default-features = false }
 futures = { version = "0.3.31", default-features = false }
 metrics = { version = "0.24.2", default-features = false }
@@ -28,6 +29,7 @@ sqlx = { version = "0.8.6", default-features = false, features = [
   "chrono",
   "uuid",
 ] }
+thiserror = { version = "2.0", default-features = false }
 tokio = { version = "1.47.0", default-features = false, features = ["rt-multi-thread", "macros", "signal"] }
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", default-features = false, rev = "c4b473b478b3adfbf8667d2fbe895d8423f1290b", features = [
   "runtime",
@@ -41,7 +43,6 @@ tracing-subscriber = { version = "0.3", default-features = false, features = ["f
 x509-cert = { version = "0.2.2", default-features = false }
 
 etl          = { git = "https://github.com/supabase/etl", rev = "483c7cfaf2b3730413acce8e0b4ad79a8cf28bbd" }
-etl-config   = { git = "https://github.com/supabase/etl", rev = "483c7cfaf2b3730413acce8e0b4ad79a8cf28bbd" }
 etl-postgres = { git = "https://github.com/supabase/etl", rev = "483c7cfaf2b3730413acce8e0b4ad79a8cf28bbd" }
 uuid         = { version = "1.19.0", default-features = false, features = ["v4"] }
 
@@ -57,6 +58,8 @@ testcontainers         = { version = "0.23", optional = true }
 testcontainers-modules = { version = "0.11", optional = true, features = ["postgres"] }
 
 [dev-dependencies]
+temp-env = "0.3"
+tempfile = "3.13"
 
 [lints.clippy]
 fallible_impl_from        = "deny"
