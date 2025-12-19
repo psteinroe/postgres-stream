@@ -39,6 +39,8 @@ where
 pub struct FailoverClient {
     stream_id: StreamId,
     client: Arc<Client>,
+    /// Server version extracted from connection - reserved for future version-specific logic
+    #[allow(dead_code)]
     server_version: Option<NonZeroI32>,
 }
 
@@ -125,6 +127,7 @@ impl FailoverClient {
     }
 
     /// Checks if the underlying connection is closed.
+    #[must_use]
     pub fn is_closed(&self) -> bool {
         self.client.is_closed()
     }
@@ -137,7 +140,7 @@ impl FailoverClient {
         let copy_query = format!(
             r#"
                 copy (
-                  select id, created_at, payload, metadata, stream_id
+                  select id, payload, metadata, stream_id, created_at
                   from pgstream.events
                   where (created_at, id) > ('{}'::timestamptz, '{}'::uuid)
                     and (created_at, id) < ('{}'::timestamptz, '{}'::uuid)

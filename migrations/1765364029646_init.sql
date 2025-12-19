@@ -15,7 +15,7 @@ begin
     return uuidv7 ();
   end if;
   ts_ms := floor(extract(epoch from clock_timestamp()) * 1000)::bigint;
-  rnd := uuid_send(public.uuid_generate_v4 ());
+  rnd := uuid_send(gen_random_uuid());
   b := repeat(e'\\000', 16)::bytea;
   for i in 0..5 loop
     b := set_byte(b, i, ((ts_ms >> ((5 - i) * 8)) & 255)::int);

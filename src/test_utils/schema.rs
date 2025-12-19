@@ -27,16 +27,16 @@ pub async fn init_events_schema(
     let table_id = TableId::new(row.0 as u32);
 
     // Manually create the schema for the events table
-    // Based on the migration: id, payload, metadata, stream_id, created_at
+    // Column order MUST match the actual table: id, payload, metadata, stream_id, created_at
     let schema = TableSchema {
         id: table_id,
         name: TableName::new("pgstream".to_string(), "events".to_string()),
         column_schemas: vec![
             ColumnSchema::new("id".to_string(), Type::UUID, -1, false, true),
-            ColumnSchema::new("created_at".to_string(), Type::TIMESTAMPTZ, -1, false, true),
             ColumnSchema::new("payload".to_string(), Type::JSONB, -1, true, false),
             ColumnSchema::new("metadata".to_string(), Type::JSONB, -1, true, false),
             ColumnSchema::new("stream_id".to_string(), Type::INT8, -1, false, false),
+            ColumnSchema::new("created_at".to_string(), Type::TIMESTAMPTZ, -1, false, true),
         ],
     };
 

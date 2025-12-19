@@ -101,6 +101,7 @@ where
 pub struct RustlsStream<S>(TlsStream<S>);
 
 impl<S> RustlsStream<S> {
+    #[must_use]
     pub fn project_stream(self: Pin<&mut Self>) -> Pin<&mut TlsStream<S>> {
         // SAFETY: When `Self` is pinned, so is the inner `TlsStream`.
         #[allow(unsafe_code)]

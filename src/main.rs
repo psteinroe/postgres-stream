@@ -1,27 +1,10 @@
 use etl::error::EtlResult;
 use etl_config::load_config;
+use postgres_stream::config::PipelineConfig;
+use postgres_stream::core::start_pipeline_with_config;
+use postgres_stream::metrics::init_metrics;
 use tracing::{error, info};
 use tracing_subscriber::{EnvFilter, fmt};
-
-use crate::{config::PipelineConfig, core::start_pipeline_with_config, metrics::init_metrics};
-
-mod concurrency;
-pub mod config;
-mod core;
-mod failover_client;
-pub mod maintenance;
-mod metrics;
-pub mod migrations;
-mod queries;
-pub mod sink;
-pub mod store;
-pub mod stream;
-pub mod subscriptions;
-pub mod types;
-mod utils;
-
-#[cfg(test)]
-pub mod test_utils;
 
 /// Jemalloc allocator for better memory management in high-throughput async workloads.
 #[cfg(not(target_env = "msvc"))]
@@ -92,7 +75,7 @@ fn main() -> anyhow::Result<()> {
 async fn async_main(config: PipelineConfig) -> EtlResult<()> {
     // Start the jemalloc metrics collection background task.
     #[cfg(not(target_env = "msvc"))]
-    metrics::spawn_jemalloc_metrics_task(config.stream.id);
+    postgres_stream::metrics::spawn_jemalloc_metrics_task(config.stream.id);
 
     // Start the daemon with error handling
     if let Err(err) = start_pipeline_with_config(config).await {

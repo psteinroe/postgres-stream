@@ -12,8 +12,8 @@ stream:
       enabled: false
       trusted_root_certs: ""
   batch:
-    max_size: 10000
-    max_fill_ms: 1000
+    max_size: 100
+    max_fill_ms: 50
 
 sink:
   type: memory
