@@ -47,8 +47,9 @@ WORKDIR /app
 # Create non-root user (distroless already has nonroot user)
 USER nonroot:nonroot
 
-# Copy binary
+# Copy binary and configuration files
 COPY --from=builder /app/target/release/postgres-stream ./postgres-stream
+COPY configuration/ ./configuration/
 
 # Use exec form for proper signal handling
 ENTRYPOINT ["./postgres-stream"]

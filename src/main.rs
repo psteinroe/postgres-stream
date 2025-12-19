@@ -1,6 +1,5 @@
 use etl::error::EtlResult;
-use etl_config::load_config;
-use postgres_stream::config::PipelineConfig;
+use postgres_stream::config::{PipelineConfig, load_config};
 use postgres_stream::core::start_pipeline_with_config;
 use postgres_stream::metrics::init_metrics;
 use tracing::{error, info};

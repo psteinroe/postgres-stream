@@ -1,6 +1,3 @@
-# Base configuration for daemon
-# This file contains default settings that apply to all environments
-
 stream:
   id: 1
   pg_connection:
@@ -12,8 +9,8 @@ stream:
       enabled: false
       trusted_root_certs: ""
   batch:
-    max_size: 100
-    max_fill_ms: 50
+    max_size: 1000
+    max_fill_ms: 1000
 
 sink:
   type: memory
