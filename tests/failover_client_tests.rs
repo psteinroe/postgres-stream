@@ -1,6 +1,9 @@
 use chrono::Utc;
 use postgres_stream::failover_client::FailoverClient;
-use postgres_stream::test_utils::{TestDatabase, insert_events_to_db};
+use postgres_stream::store::StreamStore;
+use postgres_stream::test_utils::{
+    TestDatabase, create_postgres_store, insert_events_to_db, test_stream_config,
+};
 use postgres_stream::types::EventIdentifier;
 use uuid::Uuid;
 
@@ -157,7 +160,17 @@ async fn test_get_events_copy_stream_empty_range() {
         .expect("Failed to get copy stream");
 
     // The stream should be empty (no events between same ID)
-    drop(stream);
+    use futures::StreamExt;
+    use tokio::pin;
+
+    pin!(stream);
+
+    let mut count = 0;
+    while stream.next().await.is_some() {
+        count += 1;
+    }
+
+    assert_eq!(count, 0, "Stream should be empty for same from/to range");
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -172,6 +185,12 @@ async fn test_get_events_copy_stream_with_events() {
     // Insert multiple events
     let events = insert_events_to_db(&db, 5).await;
 
+    // Get table schema to parse the copy stream
+    let config = test_stream_config(&db);
+    let store_backend = create_postgres_store(config.id, &db.config, &db.pool).await;
+    let store = StreamStore::create(config, store_backend).await.unwrap();
+    let table_schema = store.get_events_table_schema().await.unwrap();
+
     // Request range from event 0 to event 4 (should get events 1, 2, 3)
     let stream = client
         .get_events_copy_stream(
@@ -181,22 +200,22 @@ async fn test_get_events_copy_stream_with_events() {
         .await
         .expect("Failed to get copy stream");
 
-    // Read from the stream (this is a CopyOutStream, we can't easily count without parsing)
-    // But we can verify it doesn't error
+    // Wrap with TableCopyStream to parse the COPY protocol
+    use etl::replication::stream::TableCopyStream;
     use futures::StreamExt;
     use tokio::pin;
 
+    let stream = TableCopyStream::wrap(stream, &table_schema.column_schemas, 1);
     pin!(stream);
 
-    let mut count = 0;
+    let mut event_count = 0;
     while let Some(result) = stream.next().await {
-        result.expect("Copy stream should not error");
-        count += 1;
+        let _row = result.expect("Should parse row successfully");
+        event_count += 1;
     }
 
-    // We should have received some data (3 events worth of data)
-    // Note: CopyOutStream returns bytes, not parsed rows, so we just check it's non-zero
-    assert!(count > 0, "Should have received copy data");
+    // Should get events 1, 2, 3 (events between 0 and 4, exclusive)
+    assert_eq!(event_count, 3, "Should have received exactly 3 events");
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -208,10 +227,20 @@ async fn test_get_events_copy_stream_boundary_conditions() {
         .await
         .expect("Failed to connect");
 
+    // Get table schema to parse the copy stream
+    let config = test_stream_config(&db);
+    let store_backend = create_postgres_store(config.id, &db.config, &db.pool).await;
+    let store = StreamStore::create(config, store_backend).await.unwrap();
+    let table_schema = store.get_events_table_schema().await.unwrap();
+
     // Insert events with specific timing
     let events = insert_events_to_db(&db, 10).await;
 
-    // Test boundary: from first to second (should exclude both boundaries)
+    use etl::replication::stream::TableCopyStream;
+    use futures::StreamExt;
+    use tokio::pin;
+
+    // Test boundary: from first to second (should exclude both boundaries, so 0 events)
     let stream = client
         .get_events_copy_stream(
             events.first().expect("Should have event 0"),
@@ -220,9 +249,17 @@ async fn test_get_events_copy_stream_boundary_conditions() {
         .await
         .expect("Failed to get copy stream");
 
-    drop(stream);
+    let stream = TableCopyStream::wrap(stream, &table_schema.column_schemas, 1);
+    pin!(stream);
 
-    // Test boundary: from middle to end
+    let mut count = 0;
+    while let Some(result) = stream.next().await {
+        let _row = result.expect("Should parse row successfully");
+        count += 1;
+    }
+    assert_eq!(count, 0, "Should have 0 events between consecutive IDs");
+
+    // Test boundary: from middle to end (events 5, 6, 7, 8)
     let stream = client
         .get_events_copy_stream(
             events.get(4).expect("Should have event 4"),
@@ -231,7 +268,15 @@ async fn test_get_events_copy_stream_boundary_conditions() {
         .await
         .expect("Failed to get copy stream");
 
-    drop(stream);
+    let stream = TableCopyStream::wrap(stream, &table_schema.column_schemas, 1);
+    pin!(stream);
+
+    let mut count = 0;
+    while let Some(result) = stream.next().await {
+        let _row = result.expect("Should parse row successfully");
+        count += 1;
+    }
+    assert_eq!(count, 4, "Should have 4 events between indices 4 and 9");
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -280,7 +325,13 @@ async fn test_get_events_copy_stream_filters_by_stream_id() {
         .await
         .expect("Failed to connect");
 
-    // Request events for stream 1 only
+    // Get table schema to parse the copy stream
+    let config = test_stream_config(&db);
+    let store_backend = create_postgres_store(config.id, &db.config, &db.pool).await;
+    let store = StreamStore::create(config, store_backend).await.unwrap();
+    let table_schema = store.get_events_table_schema().await.unwrap();
+
+    // Request events for stream 1 only (from event 0 to event 2, should get event 1)
     let stream = client
         .get_events_copy_stream(
             events_stream_1.first().expect("Should have event 0"),
@@ -289,9 +340,22 @@ async fn test_get_events_copy_stream_filters_by_stream_id() {
         .await
         .expect("Failed to get copy stream");
 
-    // Stream should only contain stream 1 events
-    // We can't easily parse the COPY format here, but the query should execute successfully
-    drop(stream);
+    // Wrap with TableCopyStream to parse and verify only stream 1 events are returned
+    use etl::replication::stream::TableCopyStream;
+    use futures::StreamExt;
+    use tokio::pin;
+
+    let stream = TableCopyStream::wrap(stream, &table_schema.column_schemas, 1);
+    pin!(stream);
+
+    let mut count = 0;
+    while let Some(result) = stream.next().await {
+        let _row = result.expect("Should parse row successfully");
+        count += 1;
+    }
+
+    // Should only get event 1 from stream 1 (stream 2 events should be filtered out)
+    assert_eq!(count, 1, "Should have exactly 1 event from stream 1");
 }
 
 #[tokio::test(flavor = "multi_thread")]

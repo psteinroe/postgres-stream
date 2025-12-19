@@ -250,11 +250,15 @@ async fn test_payload_extensions() {
 
     // Create subscription with payload extensions
     // Note: expressions are SQL expressions evaluated at trigger execution time
-    // String literals need quotes, column references don't (e.g., new.message_id)
+    // String literals need quotes, dynamic expressions (column references) don't
     let payload_extensions = serde_json::json!([
         {"json_path": "metadata.source", "expression": "'web_app'"},
         {"json_path": "metadata.version", "expression": "'1.0.0'"},
-        {"json_path": "custom_field", "expression": "'custom_value'"}
+        {"json_path": "custom_field", "expression": "'custom_value'"},
+        // Dynamic expressions - reference actual column values
+        {"json_path": "user_name_upper", "expression": "upper(new.name)"},
+        {"json_path": "is_senior", "expression": "new.age >= 30"},
+        {"json_path": "age_doubled", "expression": "new.age * 2"}
     ]);
 
     create_subscription(
@@ -267,23 +271,23 @@ async fn test_payload_extensions() {
     )
     .await;
 
-    // Debug: Check what build_payload_from_extensions returns
+    // Verify build_payload_from_extensions generates valid SQL
     let payload_expr: String =
         sqlx::query_scalar("select pgstream.build_payload_from_extensions($1)")
             .bind(&payload_extensions)
             .fetch_one(&db.pool)
             .await
             .expect("Failed to get build_payload_from_extensions result");
-    println!("build_payload_from_extensions SQL expression: {payload_expr}");
 
-    // Debug: Check what the generated function looks like
-    let func_def: String = sqlx::query_scalar(
-        "select pg_get_functiondef('pgstream._publish_after_insert_on_users'::regproc)",
-    )
-    .fetch_one(&db.pool)
-    .await
-    .expect("Failed to get function definition");
-    println!("Generated function:\n{func_def}");
+    // Assert the SQL expression contains expected JSONB operations
+    assert!(
+        payload_expr.contains("jsonb_build_object"),
+        "Should use jsonb_build_object"
+    );
+    assert!(
+        payload_expr.contains("'metadata'"),
+        "Should contain metadata path"
+    );
 
     // Insert a user
     sqlx::query(
@@ -301,14 +305,20 @@ async fn test_payload_extensions() {
     assert_eq!(events.len(), 1);
 
     let event = events.first().expect("Should have 1 event");
-    println!(
-        "Event payload: {}",
-        serde_json::to_string_pretty(event).unwrap()
-    );
+
+    // Verify original event data
     assert_eq!(event["new"]["name"], "Frank");
+    assert_eq!(event["new"]["age"], 40);
+
+    // Verify static string extensions
     assert_eq!(event["metadata"]["source"], "web_app");
     assert_eq!(event["metadata"]["version"], "1.0.0");
     assert_eq!(event["custom_field"], "custom_value");
+
+    // Verify dynamic expression extensions
+    assert_eq!(event["user_name_upper"], "FRANK");
+    assert_eq!(event["is_senior"], true);
+    assert_eq!(event["age_doubled"], 80);
 }
 
 #[tokio::test(flavor = "multi_thread")]

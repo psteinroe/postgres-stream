@@ -147,11 +147,18 @@ async fn test_failover_recovery_replays_missed_events() {
 
     let published: Vec<TriggeredEvent> = sink.events().await;
 
-    assert!(
-        published.len() >= 6,
-        "Expected at least 6 events, got {}",
-        published.len()
-    );
+    // Should have all 6 events: event 0 (initial), events 1-4 (replayed), event 5 (new)
+    assert_eq!(published.len(), 6, "Should have exactly 6 events published");
+
+    // Verify all event IDs are present
+    let published_ids: Vec<String> = published.iter().map(|e| e.id.id.clone()).collect();
+    for event_id in &all_event_ids {
+        assert!(
+            published_ids.contains(&event_id.id),
+            "Event {} should be in published events",
+            event_id.id
+        );
+    }
 
     let stream_store = StreamStore::create(config, store).await.unwrap();
     let (status, _) = stream_store.get_stream_state().await.unwrap();
@@ -215,11 +222,18 @@ async fn test_failover_with_no_missed_events() {
     let published = sink.events().await;
 
     // Should have published: event 0 (success), event 1 (retry), event 2 (new)
-    assert!(
-        published.len() >= 3,
-        "Expected at least 3 events, got {}",
-        published.len()
-    );
+    assert_eq!(published.len(), 3, "Should have exactly 3 events published");
+
+    // Verify all 3 event IDs are present
+    let published_ids: Vec<String> = published.iter().map(|e| e.id.id.clone()).collect();
+    for i in 0..3 {
+        let event_id = event_ids.get(i).expect("Should have event");
+        assert!(
+            published_ids.contains(&event_id.id),
+            "Event {} should be in published events",
+            event_id.id
+        );
+    }
 
     let stream_store = StreamStore::create(config, store).await.unwrap();
     let (status, _) = stream_store.get_stream_state().await.unwrap();
@@ -290,12 +304,31 @@ async fn test_failover_multiple_consecutive_failures() {
 
     let published = sink.events().await;
 
-    // Should eventually publish all events
+    // Should eventually publish all 5 unique events: 0, 1, 2, 3, 4
+    // Note: Event 2 might be published twice (once when written, once during replay)
+    // because checkpoint republish failed but event 2 publish succeeded
     assert!(
-        published.len() >= 5,
-        "Expected at least 5 events, got {}",
+        published.len() >= 5 && published.len() <= 6,
+        "Should have 5-6 events published (event 2 may be duplicated), got {}",
         published.len()
     );
+
+    // Verify all 5 unique event IDs are present
+    let published_ids: std::collections::HashSet<String> =
+        published.iter().map(|e| e.id.id.clone()).collect();
+    assert_eq!(
+        published_ids.len(),
+        5,
+        "Should have exactly 5 unique event IDs"
+    );
+    for i in 0..5 {
+        let event_id = event_ids.get(i).expect("Should have event");
+        assert!(
+            published_ids.contains(&event_id.id),
+            "Event {} should be in published events",
+            event_id.id
+        );
+    }
 
     let stream_store = StreamStore::create(config, store).await.unwrap();
     let (status, _) = stream_store.get_stream_state().await.unwrap();
@@ -357,11 +390,28 @@ async fn test_failover_large_gap_recovery() {
     let published = sink.events().await;
 
     // Should have: event 0 (success) + events 5-48 (replayed) + event 49 (new) = 46 events
-    assert!(
-        published.len() >= 46,
-        "Expected at least 46 events after gap recovery, got {}",
-        published.len()
+    assert_eq!(
+        published.len(),
+        46,
+        "Should have exactly 46 events after gap recovery"
     );
+
+    // Verify event 0 is present
+    let published_ids: Vec<String> = published.iter().map(|e| e.id.id.clone()).collect();
+    assert!(
+        published_ids.contains(&event_ids.first().expect("Should have event 0").id),
+        "Event 0 should be present"
+    );
+
+    // Verify events 5-49 are present
+    for i in 5..50 {
+        let event_id = event_ids.get(i).expect("Should have event");
+        assert!(
+            published_ids.contains(&event_id.id),
+            "Event {} should be in published events",
+            event_id.id
+        );
+    }
 
     let stream_store = StreamStore::create(config, store).await.unwrap();
     let (status, _) = stream_store.get_stream_state().await.unwrap();
@@ -441,12 +491,19 @@ async fn test_failover_checkpoint_persists_across_stream_instances() {
 
     let published = sink.events().await;
 
-    // Should have recovered and published all events
-    assert!(
-        published.len() >= 3,
-        "Expected at least 3 events after recovery, got {}",
-        published.len()
-    );
+    // Should have recovered and published all 3 events
+    assert_eq!(published.len(), 3, "Should have exactly 3 events published");
+
+    // Verify all 3 event IDs are present
+    let published_ids: Vec<String> = published.iter().map(|e| e.id.id.clone()).collect();
+    for i in 0..3 {
+        let event_id = event_ids.get(i).expect("Should have event");
+        assert!(
+            published_ids.contains(&event_id.id),
+            "Event {} should be in published events",
+            event_id.id
+        );
+    }
 
     let stream_store2 = StreamStore::create(config, store).await.unwrap();
     let (status, _) = stream_store2.get_stream_state().await.unwrap();
