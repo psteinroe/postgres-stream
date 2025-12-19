@@ -23,17 +23,25 @@ pub fn test_stream_config(db: &TestDatabase) -> StreamConfig {
 /// Column order: id, payload, metadata, stream_id, created_at
 #[must_use]
 pub fn make_test_event(table_id: TableId, payload: serde_json::Value) -> Event {
+    // Use today's date with a fixed time for deterministic tests
+    let today = Utc::now().date_naive();
+    let timestamp = today
+        .and_hms_opt(0, 0, 0)
+        .unwrap()
+        .and_local_timezone(Utc)
+        .unwrap();
+
     Event::Insert(InsertEvent {
         start_lsn: PgLsn::from(0),
         commit_lsn: PgLsn::from(0),
         table_id,
         table_row: TableRow {
             values: vec![
-                Cell::Uuid(Uuid::new_v4()),    // id
-                Cell::Json(payload),           // payload
-                Cell::Null,                    // metadata
-                Cell::I64(1),                  // stream_id
-                Cell::TimestampTz(Utc::now()), // created_at
+                Cell::Uuid(Uuid::new_v4()),   // id
+                Cell::Json(payload),          // payload
+                Cell::Null,                   // metadata
+                Cell::I64(1),                 // stream_id
+                Cell::TimestampTz(timestamp), // created_at
             ],
         },
     })
@@ -68,11 +76,17 @@ pub async fn insert_events_to_db(db: &TestDatabase, count: usize) -> Vec<EventId
     db.ensure_today_partition().await;
 
     let mut event_ids = Vec::new();
-    let base_time = Utc::now();
+    // Use today's date with a fixed time to ensure deterministic ordering in tests
+    let today = Utc::now().date_naive();
+    let base_time = today
+        .and_hms_opt(0, 0, 0)
+        .unwrap()
+        .and_local_timezone(Utc)
+        .unwrap();
 
     for i in 0..count {
         let id = Uuid::new_v4();
-        // Use seconds for spacing to ensure distinct timestamps even in fast CI
+        // Use seconds for spacing to ensure distinct timestamps
         let created_at = base_time + chrono::Duration::seconds(i as i64);
         let payload = serde_json::json!({"seq": i});
 

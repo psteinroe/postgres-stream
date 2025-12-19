@@ -57,7 +57,13 @@ async fn test_update_checkpoint_persists() {
 
     // Insert an event to use as checkpoint
     let event_id = Uuid::new_v4();
-    let created_at = Utc::now();
+    // Use today's date with a fixed time to ensure deterministic ordering in tests
+    let today = Utc::now().date_naive();
+    let created_at = today
+        .and_hms_opt(0, 0, 0)
+        .unwrap()
+        .and_local_timezone(Utc)
+        .unwrap();
 
     sqlx::query(
         "insert into pgstream.events (id, created_at, payload, stream_id) values ($1::uuid, $2, $3, $4)",
@@ -286,11 +292,17 @@ async fn test_get_events_copy_stream_filters_by_stream_id() {
 
     // Insert events for stream 1
     let mut events_stream_1 = Vec::new();
-    let base_time = Utc::now();
+    // Use today's date with a fixed time to ensure deterministic ordering in tests
+    let today = Utc::now().date_naive();
+    let base_time = today
+        .and_hms_opt(0, 0, 0)
+        .unwrap()
+        .and_local_timezone(Utc)
+        .unwrap();
 
     for i in 0..3 {
         let id = Uuid::new_v4();
-        // Use seconds for spacing to ensure distinct timestamps even in fast CI
+        // Use seconds for spacing to ensure distinct timestamps
         let created_at = base_time + chrono::Duration::seconds(i * 2);
 
         sqlx::query(
