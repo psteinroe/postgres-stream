@@ -208,12 +208,11 @@ where
 
     let mut environment_source = config::Environment::with_prefix(ENV_PREFIX)
         .prefix_separator(ENV_PREFIX_SEPARATOR)
-        .separator(ENV_SEPARATOR);
+        .separator(ENV_SEPARATOR)
+        .try_parsing(true);
 
     if !T::LIST_PARSE_KEYS.is_empty() {
-        environment_source = environment_source
-            .try_parsing(true)
-            .list_separator(LIST_SEPARATOR);
+        environment_source = environment_source.list_separator(LIST_SEPARATOR);
 
         for key in <T as Config>::LIST_PARSE_KEYS {
             environment_source = environment_source.with_list_parse_key(key);
@@ -441,6 +440,30 @@ mod tests {
                 let config: TestConfig = load_config().unwrap();
                 assert_eq!(config.value, "prod");
                 assert_eq!(config.number, 2);
+            },
+        );
+    }
+
+    #[test]
+    fn test_env_vars_parse_numbers() {
+        let temp_dir = TempDir::new().unwrap();
+        let config_dir = temp_dir.path().join("configuration");
+        fs::create_dir(&config_dir).unwrap();
+
+        let base_content = "value: \"base\"\nnumber: 1\n";
+        fs::write(config_dir.join("base.yml"), base_content).unwrap();
+
+        with_vars(
+            vec![
+                ("APP_ENVIRONMENT", Some("prod")),
+                ("APP_CONFIG_DIR", Some(config_dir.to_str().unwrap())),
+                ("APP_VALUE", Some("from_env")),
+                ("APP_NUMBER", Some("5432")), // String that should parse to i32
+            ],
+            || {
+                let config: TestConfig = load_config().unwrap();
+                assert_eq!(config.value, "from_env");
+                assert_eq!(config.number, 5432);
             },
         );
     }
