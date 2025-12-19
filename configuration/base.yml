@@ -5,6 +5,7 @@ stream:
     port: 5432
     name: "postgres"
     username: "postgres"
+    password: null
     tls:
       enabled: false
       trusted_root_certs: ""
