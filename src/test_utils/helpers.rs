@@ -68,10 +68,12 @@ pub async fn insert_events_to_db(db: &TestDatabase, count: usize) -> Vec<EventId
     db.ensure_today_partition().await;
 
     let mut event_ids = Vec::new();
+    let base_time = Utc::now();
 
     for i in 0..count {
         let id = Uuid::new_v4();
-        let created_at = Utc::now() + chrono::Duration::milliseconds(i as i64);
+        // Use seconds for spacing to ensure distinct timestamps even in fast CI
+        let created_at = base_time + chrono::Duration::seconds(i as i64);
         let payload = serde_json::json!({"seq": i});
 
         sqlx::query(

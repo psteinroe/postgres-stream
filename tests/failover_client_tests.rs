@@ -286,9 +286,12 @@ async fn test_get_events_copy_stream_filters_by_stream_id() {
 
     // Insert events for stream 1
     let mut events_stream_1 = Vec::new();
+    let base_time = Utc::now();
+
     for i in 0..3 {
         let id = Uuid::new_v4();
-        let created_at = Utc::now() + chrono::Duration::milliseconds(i * 10);
+        // Use seconds for spacing to ensure distinct timestamps even in fast CI
+        let created_at = base_time + chrono::Duration::seconds(i * 2);
 
         sqlx::query(
             "insert into pgstream.events (id, created_at, payload, stream_id) values ($1::uuid, $2, $3, $4)",
@@ -304,10 +307,11 @@ async fn test_get_events_copy_stream_filters_by_stream_id() {
         events_stream_1.push(EventIdentifier::new(id.to_string(), created_at));
     }
 
-    // Insert events for stream 2 (should be filtered out)
+    // Insert events for stream 2 (should be filtered out) - interleave with stream 1
     for i in 0..3 {
         let id = Uuid::new_v4();
-        let created_at = Utc::now() + chrono::Duration::milliseconds(i * 10 + 5);
+        // Offset by 1 second so they interleave: stream1@0s, stream2@1s, stream1@2s, stream2@3s, etc
+        let created_at = base_time + chrono::Duration::seconds(i * 2 + 1);
 
         sqlx::query(
             "insert into pgstream.events (id, created_at, payload, stream_id) values ($1::uuid, $2, $3, $4)",
