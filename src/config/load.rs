@@ -467,4 +467,66 @@ mod tests {
             },
         );
     }
+
+    #[test]
+    fn test_full_pipeline_config_from_env() {
+        use crate::config::PipelineConfig;
+
+        let temp_dir = TempDir::new().unwrap();
+        let config_dir = temp_dir.path().join("configuration");
+        fs::create_dir(&config_dir).unwrap();
+
+        // Minimal base.yml with just structure
+        let base_content = r#"
+stream:
+  id: 1
+  pg_connection:
+    host: "localhost"
+    port: 5432
+    name: "postgres"
+    username: "postgres"
+    password: null
+    tls:
+      enabled: false
+      trusted_root_certs: ""
+  batch:
+    max_size: 100
+    max_fill_ms: 50
+sink:
+  type: memory
+"#;
+        fs::write(config_dir.join("base.yml"), base_content).unwrap();
+
+        // Override everything via env vars (simulating Fargate deployment)
+        with_vars(
+            vec![
+                ("APP_ENVIRONMENT", Some("prod")),
+                ("APP_CONFIG_DIR", Some(config_dir.to_str().unwrap())),
+                ("APP_STREAM__ID", Some("2")),
+                ("APP_STREAM__PG_CONNECTION__HOST", Some("db.example.com")),
+                ("APP_STREAM__PG_CONNECTION__PORT", Some("5433")),
+                ("APP_STREAM__PG_CONNECTION__NAME", Some("mydb")),
+                ("APP_STREAM__PG_CONNECTION__USERNAME", Some("user")),
+                ("APP_STREAM__PG_CONNECTION__PASSWORD", Some("secret")),
+                ("APP_STREAM__PG_CONNECTION__TLS__ENABLED", Some("false")),
+                (
+                    "APP_STREAM__PG_CONNECTION__TLS__TRUSTED_ROOT_CERTS",
+                    Some(""),
+                ),
+                ("APP_STREAM__BATCH__MAX_SIZE", Some("200")),
+                ("APP_STREAM__BATCH__MAX_FILL_MS", Some("100")),
+                ("APP_SINK__TYPE", Some("memory")),
+            ],
+            || {
+                let config: PipelineConfig = load_config().unwrap();
+                assert_eq!(config.stream.id, 2);
+                assert_eq!(config.stream.pg_connection.host, "db.example.com");
+                assert_eq!(config.stream.pg_connection.port, 5433);
+                assert_eq!(config.stream.pg_connection.name, "mydb");
+                assert_eq!(config.stream.pg_connection.username, "user");
+                assert_eq!(config.stream.batch.max_size, 200);
+                assert_eq!(config.stream.batch.max_fill_ms, 100);
+            },
+        );
+    }
 }
