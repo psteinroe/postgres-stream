@@ -111,8 +111,8 @@ where
 
         // Record processing lag based on the last event's timestamp
         if let Some(timestamp) = last_event_timestamp {
-            let lag_seconds = (Utc::now() - timestamp).num_seconds() as f64;
-            metrics::record_processing_lag(self.config.id, lag_seconds);
+            let lag_milliseconds = (Utc::now() - timestamp).num_milliseconds();
+            metrics::record_processing_lag(self.config.id, lag_milliseconds);
         }
 
         Ok(())
@@ -168,8 +168,8 @@ where
         let checkpoint_event = self.store.get_checkpoint_event(checkpoint_event_id).await?;
 
         // Record processing lag for checkpoint event
-        let lag_seconds = (Utc::now() - checkpoint_event.id.created_at).num_seconds() as f64;
-        metrics::record_processing_lag(self.config.id, lag_seconds);
+        let lag_milliseconds = (Utc::now() - checkpoint_event.id.created_at).num_milliseconds();
+        metrics::record_processing_lag(self.config.id, lag_milliseconds);
 
         let result = self
             .sink
@@ -210,8 +210,8 @@ where
             self.sink.publish_events(events).await?;
 
             // Record processing lag during failover replay
-            let lag_seconds = (Utc::now() - last_event_timestamp).num_seconds() as f64;
-            metrics::record_processing_lag(self.config.id, lag_seconds);
+            let lag_milliseconds = (Utc::now() - last_event_timestamp).num_milliseconds();
+            metrics::record_processing_lag(self.config.id, lag_milliseconds);
 
             failover.update_checkpoint(&last_event_id).await?;
         }
