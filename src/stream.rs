@@ -93,6 +93,7 @@ where
         };
 
         let last_event_timestamp = events.last().map(|e| e.id.created_at);
+        let event_count = events.len();
 
         let result = self.sink.publish_events(events).await;
         if result.is_err() {
@@ -108,6 +109,9 @@ where
                 .await?;
             return Ok(());
         }
+
+        // Record events processed after successful publish
+        metrics::record_events_processed(self.config.id, event_count);
 
         // Record processing lag based on the last event's timestamp
         if let Some(timestamp) = last_event_timestamp {
