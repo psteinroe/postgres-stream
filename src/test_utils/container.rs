@@ -11,8 +11,18 @@ pub async fn ensure_postgres() -> u16 {
     // Use get_or_init to handle concurrent initialization attempts
     let port = POSTGRES_PORT
         .get_or_init(|| async {
+            // Configure postgres with wal_level=logical for replication support
             let container = Postgres::default()
                 .with_tag("16-alpine")
+                .with_cmd([
+                    "postgres",
+                    "-c",
+                    "wal_level=logical",
+                    "-c",
+                    "max_replication_slots=10",
+                    "-c",
+                    "max_wal_senders=10",
+                ])
                 .start()
                 .await
                 .expect("Failed to start postgres container");
