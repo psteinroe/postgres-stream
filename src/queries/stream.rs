@@ -13,6 +13,7 @@ pub struct StreamStateRow {
     pub event_payload: Option<serde_json::Value>,
     pub event_metadata: Option<serde_json::Value>,
     pub event_stream_id: Option<i64>,
+    pub event_lsn: Option<String>,
 }
 
 /// Fetches current state row for a stream with optional event data.
@@ -31,7 +32,8 @@ pub async fn fetch_stream_state(
             e.created_at as event_created_at,
             e.payload as event_payload,
             e.metadata as event_metadata,
-            e.stream_id as event_stream_id
+            e.stream_id as event_stream_id,
+            e.lsn::text as event_lsn
           from pgstream.streams s
           left join pgstream.events e
             on e.id::text = s.failover_checkpoint_id

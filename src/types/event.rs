@@ -1,7 +1,7 @@
 use etl::{
     error::{ErrorKind, EtlResult},
     etl_error,
-    types::{Cell, ColumnSchema, TableRow},
+    types::{Cell, ColumnSchema, PgLsn, TableRow},
 };
 
 use etl::types::Event;
@@ -49,6 +49,9 @@ pub struct TriggeredEvent {
     pub payload: serde_json::Value,
     pub metadata: Option<serde_json::Value>,
     pub stream_id: StreamId,
+    /// The WAL LSN at the time the event was inserted.
+    /// Used for precise replay point lookup during slot recovery.
+    pub lsn: Option<PgLsn>,
 }
 
 impl TriggeredEvent {
@@ -81,6 +84,7 @@ pub fn convert_event_from_table(
     let mut payload = None;
     let mut metadata = None;
     let mut stream_id = None;
+    let mut lsn = None;
 
     for (idx, col) in column_schemas.iter().enumerate() {
         let Some(cell) = table_row.values.get_mut(idx) else {
@@ -93,6 +97,7 @@ pub fn convert_event_from_table(
             ("payload", Cell::Json(v)) => payload = Some(v),
             ("metadata", Cell::Json(v)) => metadata = Some(v),
             ("stream_id", Cell::I64(v)) => stream_id = Some(StreamId::from(v as u64)),
+            ("lsn", Cell::String(v)) => lsn = v.parse().ok(),
             _ => {}
         }
     }
@@ -105,6 +110,7 @@ pub fn convert_event_from_table(
         payload: payload.ok_or_else(|| missing!("payload"))?,
         stream_id: stream_id.ok_or_else(|| missing!("stream_id"))?,
         metadata,
+        lsn,
     })
 }
 
@@ -155,6 +161,7 @@ mod tests {
             ColumnSchema::new("payload".to_string(), Type::JSONB, -1, true, false),
             ColumnSchema::new("metadata".to_string(), Type::JSONB, -1, true, false),
             ColumnSchema::new("stream_id".to_string(), Type::INT8, -1, false, false),
+            ColumnSchema::new("lsn".to_string(), Type::TEXT, -1, true, false),
         ]
     }
 
@@ -168,8 +175,26 @@ mod tests {
                 Cell::Uuid(id),
                 Cell::TimestampTz(created_at),
                 Cell::Json(payload),
+                Cell::Null,                            // metadata
+                Cell::I64(1),                          // stream_id
+                Cell::String("0/16B3748".to_string()), // lsn (parsed to PgLsn)
+            ],
+        }
+    }
+
+    fn make_table_row_without_lsn(
+        id: Uuid,
+        created_at: chrono::DateTime<Utc>,
+        payload: serde_json::Value,
+    ) -> TableRow {
+        TableRow {
+            values: vec![
+                Cell::Uuid(id),
+                Cell::TimestampTz(created_at),
+                Cell::Json(payload),
                 Cell::Null,   // metadata
                 Cell::I64(1), // stream_id
+                Cell::Null,   // lsn (null for events before migration)
             ],
         }
     }
@@ -188,6 +213,24 @@ mod tests {
         assert_eq!(result.id.id, id.to_string());
         assert_eq!(result.id.created_at, created_at);
         assert_eq!(result.payload, payload);
+        assert_eq!(result.lsn, Some("0/16B3748".parse().unwrap()));
+    }
+
+    #[test]
+    fn test_convert_event_from_table_without_lsn() {
+        let column_schemas = make_column_schemas();
+        let id = Uuid::new_v4();
+        let created_at = Utc::now();
+        let payload = serde_json::json!({"test": "data"});
+
+        let mut table_row = make_table_row_without_lsn(id, created_at, payload.clone());
+
+        let result = convert_event_from_table(&mut table_row, &column_schemas).unwrap();
+
+        assert_eq!(result.id.id, id.to_string());
+        assert_eq!(result.id.created_at, created_at);
+        assert_eq!(result.payload, payload);
+        assert_eq!(result.lsn, None);
     }
 
     #[test]
@@ -200,6 +243,7 @@ mod tests {
                 Cell::Json(serde_json::json!({"test": "data"})),
                 Cell::Null,
                 Cell::I64(1),
+                Cell::Null, // lsn
             ],
         };
 
@@ -219,6 +263,7 @@ mod tests {
                 Cell::Json(serde_json::json!({"test": "data"})),
                 Cell::Null,
                 Cell::I64(1),
+                Cell::Null, // lsn
             ],
         };
 
@@ -243,6 +288,7 @@ mod tests {
                 Cell::Null, // Missing payload
                 Cell::Null,
                 Cell::I64(1),
+                Cell::Null, // lsn
             ],
         };
 
@@ -335,6 +381,7 @@ mod tests {
                     Cell::Json(serde_json::json!({"test": 1})),
                     Cell::Null,
                     Cell::I64(1),
+                    Cell::Null, // lsn
                 ],
             },
         })];
@@ -408,12 +455,14 @@ mod tests {
             payload: payload.clone(),
             metadata: None,
             stream_id: StreamId::from(1u64),
+            lsn: Some("0/16B3748".parse().unwrap()),
         };
         let event2 = TriggeredEvent {
             id,
             payload,
             metadata: None,
             stream_id: StreamId::from(1u64),
+            lsn: Some("0/16B3748".parse().unwrap()),
         };
 
         assert_eq!(event1, event2);
@@ -430,6 +479,7 @@ mod tests {
             payload,
             metadata: None,
             stream_id: StreamId::from(1u64),
+            lsn: None,
         };
         let (id_returned, created_at) = event.primary_keys();
 

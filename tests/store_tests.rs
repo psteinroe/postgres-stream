@@ -203,8 +203,8 @@ async fn test_store_events_table_schema_available() {
     // Get events table schema
     let schema = store.get_events_table_schema().await.unwrap();
 
-    // Verify it has the expected columns (id, created_at, payload, metadata, stream_id)
-    assert_eq!(schema.column_schemas.len(), 5);
+    // Verify it has the expected columns (id, created_at, payload, metadata, stream_id, lsn)
+    assert_eq!(schema.column_schemas.len(), 6);
 
     let column_names: Vec<&str> = schema
         .column_schemas
@@ -217,6 +217,7 @@ async fn test_store_events_table_schema_available() {
     assert!(column_names.contains(&"payload"));
     assert!(column_names.contains(&"metadata"));
     assert!(column_names.contains(&"stream_id"));
+    assert!(column_names.contains(&"lsn"));
 }
 
 #[tokio::test(flavor = "multi_thread")]

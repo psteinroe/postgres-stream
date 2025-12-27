@@ -92,6 +92,7 @@ mod tests {
             payload: serde_json::json!({ "test": id }),
             metadata: None,
             stream_id: StreamId::from(1u64),
+            lsn: Some("0/16B3748".parse().unwrap()),
         }
     }
 
