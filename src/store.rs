@@ -78,6 +78,7 @@ impl<S: SchemaStore> StreamStore<S> {
                         payload,
                         metadata: row.event_metadata,
                         stream_id: crate::types::StreamId::from(event_stream_id as u64),
+                        lsn: row.event_lsn.and_then(|s| s.parse().ok()),
                     }));
                 }
 
@@ -175,6 +176,7 @@ impl<S: SchemaStore> StreamStore<S> {
             payload: row.payload,
             metadata: row.metadata,
             stream_id: crate::types::StreamId::from(row.stream_id as u64),
+            lsn: row.lsn.and_then(|s| s.parse().ok()),
         });
 
         let mut cache = self.checkpoint_cache.write().await;

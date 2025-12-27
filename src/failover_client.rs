@@ -140,7 +140,7 @@ impl FailoverClient {
         let copy_query = format!(
             r#"
                 copy (
-                  select id, payload, metadata, stream_id, created_at
+                  select id, payload, metadata, stream_id, created_at, lsn
                   from pgstream.events
                   where (created_at, id) > ('{}'::timestamptz, '{}'::uuid)
                     and (created_at, id) < ('{}'::timestamptz, '{}'::uuid)

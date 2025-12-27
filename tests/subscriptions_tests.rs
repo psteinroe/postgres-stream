@@ -1,6 +1,7 @@
 #![allow(clippy::indexing_slicing)] // Test assertions on known JSON structure
 
 use postgres_stream::test_utils::TestDatabase;
+use postgres_stream::types::PgLsn;
 use sqlx::{PgPool, Row};
 
 async fn create_test_table(pool: &PgPool) {
@@ -64,6 +65,33 @@ async fn get_events(pool: &PgPool, stream_id: i64) -> Vec<serde_json::Value> {
 
     rows.into_iter()
         .map(|row| row.get::<serde_json::Value, _>("payload"))
+        .collect()
+}
+
+/// Helper to get events with their LSN values
+async fn get_events_with_lsn(
+    pool: &PgPool,
+    stream_id: i64,
+) -> Vec<(serde_json::Value, Option<String>)> {
+    let rows = sqlx::query(
+        r#"
+        select payload, lsn::text as lsn
+        from pgstream.events
+        where stream_id = $1
+        order by created_at, id
+        "#,
+    )
+    .bind(stream_id)
+    .fetch_all(pool)
+    .await
+    .expect("Failed to fetch events");
+
+    rows.into_iter()
+        .map(|row| {
+            let payload = row.get::<serde_json::Value, _>("payload");
+            let lsn = row.get::<Option<String>, _>("lsn");
+            (payload, lsn)
+        })
         .collect()
 }
 
@@ -437,4 +465,116 @@ async fn test_subscription_deletion_removes_trigger() {
     // Verify no new event was created
     let events_after = get_events(&db.pool, 7).await;
     assert_eq!(events_after.len(), 1); // Still just the first event
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_events_have_lsn_captured() {
+    let db = TestDatabase::spawn().await;
+    db.ensure_today_partition().await;
+
+    create_test_table(&db.pool).await;
+
+    // Create subscription
+    create_subscription(&db.pool, "user_with_lsn", 8, "INSERT", None, None).await;
+
+    // Insert multiple users
+    for i in 0..3 {
+        sqlx::query(
+            r#"
+            insert into public.users (name, email, age)
+            values ($1, $2, $3)
+            "#,
+        )
+        .bind(format!("User{i}"))
+        .bind(format!("user{i}@example.com"))
+        .bind(20 + i)
+        .execute(&db.pool)
+        .await
+        .expect("Failed to insert user");
+    }
+
+    // Verify events have LSN values
+    let events = get_events_with_lsn(&db.pool, 8).await;
+    assert_eq!(events.len(), 3);
+
+    let mut previous_lsn: Option<PgLsn> = None;
+
+    for (i, (payload, lsn_str)) in events.iter().enumerate() {
+        // Verify LSN is present
+        assert!(lsn_str.is_some(), "Event {i} should have an LSN value");
+
+        let lsn_string = lsn_str.as_ref().unwrap();
+
+        // Verify LSN format is valid (can be parsed to PgLsn)
+        let lsn: PgLsn = lsn_string
+            .parse()
+            .unwrap_or_else(|_| panic!("LSN '{lsn_string}' should be parseable"));
+
+        // Verify LSN is monotonically increasing (or equal for same transaction)
+        if let Some(prev) = previous_lsn {
+            assert!(
+                lsn >= prev,
+                "LSN should be monotonically increasing: {lsn} >= {prev}"
+            );
+        }
+        previous_lsn = Some(lsn);
+
+        // Verify payload is still correct
+        assert_eq!(payload["new"]["name"], format!("User{i}"));
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_lsn_can_be_used_for_queries() {
+    let db = TestDatabase::spawn().await;
+    db.ensure_today_partition().await;
+
+    create_test_table(&db.pool).await;
+
+    // Create subscription
+    create_subscription(&db.pool, "user_lsn_query", 9, "INSERT", None, None).await;
+
+    // Insert users
+    for i in 0..5 {
+        sqlx::query(
+            r#"
+            insert into public.users (name, email, age)
+            values ($1, $2, $3)
+            "#,
+        )
+        .bind(format!("User{i}"))
+        .bind(format!("user{i}@example.com"))
+        .bind(20 + i)
+        .execute(&db.pool)
+        .await
+        .expect("Failed to insert user");
+    }
+
+    // Get the LSN of the second event
+    let events = get_events_with_lsn(&db.pool, 9).await;
+    let second_event_lsn = events
+        .get(1)
+        .and_then(|(_, lsn)| lsn.clone())
+        .expect("Second event should have LSN");
+
+    // Query events after the second event's LSN
+    let rows = sqlx::query(
+        r#"
+        select payload->>'new' as new_data
+        from pgstream.events
+        where stream_id = 9 and lsn > $1::pg_lsn
+        order by lsn
+        "#,
+    )
+    .bind(&second_event_lsn)
+    .fetch_all(&db.pool)
+    .await
+    .expect("Failed to query events by LSN");
+
+    // Should get events 2, 3, 4 (3 events after the second one)
+    assert_eq!(
+        rows.len(),
+        3,
+        "Should find 3 events after the second event's LSN"
+    );
 }

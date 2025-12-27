@@ -8,6 +8,7 @@ pub struct EventRow {
     pub payload: serde_json::Value,
     pub metadata: Option<serde_json::Value>,
     pub stream_id: i64,
+    pub lsn: Option<String>,
 }
 
 /// Fetches a single event by its ID and creation timestamp.
@@ -18,7 +19,7 @@ pub async fn fetch_event(
 ) -> sqlx::Result<EventRow> {
     sqlx::query_as(
         r#"
-        select id::text, created_at, payload, metadata, stream_id
+        select id::text, created_at, payload, metadata, stream_id, lsn::text
         from pgstream.events
         where id = $1::uuid and created_at = $2
         "#,
