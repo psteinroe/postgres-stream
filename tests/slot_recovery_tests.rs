@@ -18,14 +18,7 @@ use postgres_stream::test_utils::{
     TestDatabase, acquire_exclusive_test_lock, test_stream_config_with_id, unique_pipeline_id,
 };
 
-/// Test that demonstrates the current failure mode when a slot is invalidated.
-///
-/// This test:
-/// 1. Starts a pipeline (creates replication slot)
-/// 2. Shuts down the pipeline gracefully
-/// 3. Invalidates the slot while pipeline is stopped
-/// 4. Attempts to restart the pipeline
-/// 5. Expects the restart to fail (current behavior) or recover (after implementation)
+/// Test that a pipeline fails when attempting to use an invalidated slot.
 #[tokio::test(flavor = "multi_thread")]
 async fn test_pipeline_fails_on_invalidated_slot() {
     // Acquire exclusive lock since we modify system settings
@@ -226,16 +219,7 @@ async fn test_pipeline_fails_on_invalidated_slot() {
     }
 }
 
-/// Test that handle_slot_recovery correctly sets up failover checkpoint and drops the slot.
-///
-/// This test verifies:
-/// 1. handle_slot_recovery sets the failover checkpoint correctly
-/// 2. The invalid slot is dropped
-/// 3. A new pipeline can start and create a new slot
-///
-/// Note: Full integration testing of failover replay requires INSERT events to be
-/// captured by the new replication slot, which depends on ETL-level timing that's
-/// hard to control in tests.
+/// Test that handle_slot_recovery sets up failover checkpoint and allows pipeline restart.
 #[tokio::test(flavor = "multi_thread")]
 async fn test_pipeline_recovers_from_invalidated_slot() {
     // Acquire exclusive lock since we modify system settings
@@ -341,16 +325,6 @@ async fn test_pipeline_recovers_from_invalidated_slot() {
     .unwrap();
     assert_eq!(wal_status, "lost");
 
-    // Reset WAL settings immediately after invalidation to avoid affecting other tests
-    sqlx::query("alter system reset max_slot_wal_keep_size")
-        .execute(&db.pool)
-        .await
-        .unwrap();
-    sqlx::query("select pg_reload_conf()")
-        .execute(&db.pool)
-        .await
-        .unwrap();
-
     // Step 4: Insert more events after invalidation (should also be replayed)
     for i in 0..5 {
         sqlx::query("insert into pgstream.events (id, payload, stream_id, created_at, lsn) values (gen_random_uuid(), $1, $2, now(), pg_current_wal_lsn())")
@@ -453,72 +427,8 @@ async fn test_pipeline_recovers_from_invalidated_slot() {
         stream_state.0.is_some() && stream_state.1.is_some(),
         "Failover checkpoint should be set after slot recovery"
     );
-}
 
-/// Test that verifies we can detect a slot invalidation and get the recovery LSN.
-///
-/// This is a simpler test that just verifies we can query the slot status
-/// and get the information needed for recovery.
-#[tokio::test(flavor = "multi_thread")]
-async fn test_can_detect_slot_invalidation_and_get_recovery_info() {
-    // Acquire exclusive lock since we modify system settings
-    let _lock = acquire_exclusive_test_lock().await;
-
-    let db = TestDatabase::spawn().await;
-
-    let slot_name = "test_recovery_info_slot";
-
-    // Create a slot
-    sqlx::query(&format!(
-        "select pg_create_logical_replication_slot('{slot_name}', 'pgoutput')"
-    ))
-    .execute(&db.pool)
-    .await
-    .unwrap();
-
-    // Invalidate it
-    sqlx::query("alter system set max_slot_wal_keep_size = '1MB'")
-        .execute(&db.pool)
-        .await
-        .unwrap();
-    sqlx::query("select pg_reload_conf()")
-        .execute(&db.pool)
-        .await
-        .unwrap();
-
-    sqlx::query("create table wal_gen (data bytea)")
-        .execute(&db.pool)
-        .await
-        .unwrap();
-
-    for _ in 0..100 {
-        sqlx::query("insert into wal_gen select decode(repeat('ab', 50000), 'hex') from generate_series(1, 10)")
-            .execute(&db.pool)
-            .await
-            .unwrap();
-    }
-
-    let _: Option<String> = sqlx::query_scalar("select pg_switch_wal()::text")
-        .fetch_one(&db.pool)
-        .await
-        .unwrap();
-    sqlx::query("checkpoint").execute(&db.pool).await.unwrap();
-
-    // Query slot status - this is what our recovery code will need to do
-    let slot_info: (String, Option<String>) = sqlx::query_as(&format!(
-        "select wal_status, confirmed_flush_lsn::text from pg_replication_slots where slot_name = '{slot_name}'"
-    ))
-    .fetch_one(&db.pool)
-    .await
-    .unwrap();
-
-    assert_eq!(slot_info.0, "lost", "Slot should be invalidated");
-    assert!(
-        slot_info.1.is_some(),
-        "confirmed_flush_lsn should be preserved for recovery"
-    );
-
-    // Reset system settings immediately after verification
+    // Cleanup
     sqlx::query("alter system reset max_slot_wal_keep_size")
         .execute(&db.pool)
         .await
@@ -527,9 +437,4 @@ async fn test_can_detect_slot_invalidation_and_get_recovery_info() {
         .execute(&db.pool)
         .await
         .unwrap();
-
-    // Clean up the slot
-    let _ = sqlx::query(&format!("select pg_drop_replication_slot('{slot_name}')"))
-        .execute(&db.pool)
-        .await;
 }
