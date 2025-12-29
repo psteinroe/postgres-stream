@@ -17,7 +17,7 @@ async fn test_initial_partitions_created() {
     let _stream: PgStream<MemorySink, PostgresStore> =
         PgStream::create(config, sink, store).await.unwrap();
 
-    // Check that partitions exist (today + 2 days ahead = 3 partitions)
+    // Check that partitions exist (today + 6 days ahead = 7 partitions)
     let count: (i64,) = sqlx::query_as(
         "select count(*) from pg_tables
          where schemaname = 'pgstream'
@@ -27,7 +27,7 @@ async fn test_initial_partitions_created() {
     .await
     .unwrap();
 
-    assert_eq!(count.0, 3, "Should create 3 initial partitions");
+    assert_eq!(count.0, 7, "Should create 7 initial partitions");
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -77,7 +77,7 @@ async fn test_maintenance_creates_future_partitions() {
         .unwrap();
     run_maintenance(&stream_store).await.unwrap();
 
-    // Should now have 3 partitions again
+    // Should now have 7 partitions again (today + 6 days ahead)
     let count_after: (i64,) = sqlx::query_as(
         "select count(*) from pg_tables
          where schemaname = 'pgstream'
@@ -86,7 +86,7 @@ async fn test_maintenance_creates_future_partitions() {
     .fetch_one(&db.pool)
     .await
     .unwrap();
-    assert_eq!(count_after.0, 3);
+    assert_eq!(count_after.0, 7);
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -213,5 +213,5 @@ async fn test_maintenance_idempotent() {
     .await
     .unwrap();
 
-    assert_eq!(count.0, 3, "Running maintenance twice should be idempotent");
+    assert_eq!(count.0, 7, "Running maintenance twice should be idempotent");
 }

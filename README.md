@@ -329,7 +329,7 @@ When the replication slot is invalidated (WAL exceeded `max_slot_wal_keep_size`)
 Postgres Stream automatically manages daily partitions in the background:
 
 **Retention policy:**
-- **Creates partitions** 3 days in advance (today, tomorrow, day after)
+- **Creates partitions** 7 days in advance
 - **Drops partitions** older than 7 days
 - **Runs on startup** and then daily
 
