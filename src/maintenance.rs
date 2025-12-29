@@ -12,6 +12,9 @@ use crate::{
     store::StreamStore,
 };
 
+const DAYS_AHEAD_TO_CREATE: u32 = 7;
+const RETENTION_DAYS: u32 = 7;
+
 /// Domain representation of a partition with its date-based metadata.
 #[derive(Debug, Clone)]
 pub struct PartitionInfo {
@@ -117,9 +120,13 @@ pub async fn run_maintenance<S: SchemaStore>(store: &StreamStore<S>) -> EtlResul
     let result = async {
         let existing_partitions = store.load_partitions(SCHEMA_NAME, EVENTS_TABLE).await?;
 
-        let policy = RetentionPolicy::new(7);
-        let (to_drop, to_create) =
-            policy.plan_maintenance(existing_partitions, EVENTS_TABLE, 3, start);
+        let policy = RetentionPolicy::new(RETENTION_DAYS);
+        let (to_drop, to_create) = policy.plan_maintenance(
+            existing_partitions,
+            EVENTS_TABLE,
+            DAYS_AHEAD_TO_CREATE,
+            start,
+        );
 
         for partition in to_drop {
             info!("Dropping partition: {}", partition.name);
