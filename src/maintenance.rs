@@ -203,7 +203,7 @@ mod tests {
 
     #[test]
     fn test_retention_policy_plan_maintenance_drop_old() {
-        let policy = RetentionPolicy::new(7);
+        let policy = RetentionPolicy::new(RETENTION_DAYS);
         let now = Utc.with_ymd_and_hms(2024, 3, 15, 12, 0, 0).unwrap();
 
         // Partitions: one old (should drop), one current, one future
@@ -213,7 +213,8 @@ mod tests {
             PartitionInfo::for_date("events", NaiveDate::from_ymd_opt(2024, 3, 16).unwrap()), // tomorrow
         ];
 
-        let (to_drop, _to_create) = policy.plan_maintenance(partitions, "events", 3, now);
+        let (to_drop, _to_create) =
+            policy.plan_maintenance(partitions, "events", DAYS_AHEAD_TO_CREATE, now);
 
         assert_eq!(to_drop.len(), 1);
         assert_eq!(
@@ -224,42 +225,49 @@ mod tests {
 
     #[test]
     fn test_retention_policy_plan_maintenance_create_future() {
-        let policy = RetentionPolicy::new(7);
+        let policy = RetentionPolicy::new(RETENTION_DAYS);
         let now = Utc.with_ymd_and_hms(2024, 3, 15, 12, 0, 0).unwrap();
 
-        // Only today exists, should create 2 more (tomorrow and day after)
+        // Only today exists, should create 6 more (days 1-6 ahead)
         let partitions = vec![PartitionInfo::for_date(
             "events",
             NaiveDate::from_ymd_opt(2024, 3, 15).unwrap(),
         )];
 
-        let (to_drop, to_create) = policy.plan_maintenance(partitions, "events", 3, now);
+        let (to_drop, to_create) =
+            policy.plan_maintenance(partitions, "events", DAYS_AHEAD_TO_CREATE, now);
 
         assert_eq!(to_drop.len(), 0);
-        assert_eq!(to_create.len(), 2);
+        assert_eq!(to_create.len(), 6);
+        // Verify first and last created partitions
         assert_eq!(
             to_create.first().expect("first element exists").date,
             NaiveDate::from_ymd_opt(2024, 3, 16).unwrap()
         );
         assert_eq!(
-            to_create.get(1).expect("second element exists").date,
-            NaiveDate::from_ymd_opt(2024, 3, 17).unwrap()
+            to_create.last().expect("last element exists").date,
+            NaiveDate::from_ymd_opt(2024, 3, 21).unwrap()
         );
     }
 
     #[test]
     fn test_retention_policy_plan_maintenance_no_changes_needed() {
-        let policy = RetentionPolicy::new(7);
+        let policy = RetentionPolicy::new(RETENTION_DAYS);
         let now = Utc.with_ymd_and_hms(2024, 3, 15, 12, 0, 0).unwrap();
 
-        // All partitions already exist
+        // All partitions already exist (today + 6 days ahead)
         let partitions = vec![
             PartitionInfo::for_date("events", NaiveDate::from_ymd_opt(2024, 3, 15).unwrap()),
             PartitionInfo::for_date("events", NaiveDate::from_ymd_opt(2024, 3, 16).unwrap()),
             PartitionInfo::for_date("events", NaiveDate::from_ymd_opt(2024, 3, 17).unwrap()),
+            PartitionInfo::for_date("events", NaiveDate::from_ymd_opt(2024, 3, 18).unwrap()),
+            PartitionInfo::for_date("events", NaiveDate::from_ymd_opt(2024, 3, 19).unwrap()),
+            PartitionInfo::for_date("events", NaiveDate::from_ymd_opt(2024, 3, 20).unwrap()),
+            PartitionInfo::for_date("events", NaiveDate::from_ymd_opt(2024, 3, 21).unwrap()),
         ];
 
-        let (to_drop, to_create) = policy.plan_maintenance(partitions, "events", 3, now);
+        let (to_drop, to_create) =
+            policy.plan_maintenance(partitions, "events", DAYS_AHEAD_TO_CREATE, now);
 
         assert_eq!(to_drop.len(), 0);
         assert_eq!(to_create.len(), 0);
@@ -267,7 +275,7 @@ mod tests {
 
     #[test]
     fn test_retention_policy_plan_maintenance_at_retention_boundary() {
-        let policy = RetentionPolicy::new(7);
+        let policy = RetentionPolicy::new(RETENTION_DAYS);
         let now = Utc.with_ymd_and_hms(2024, 3, 15, 12, 0, 0).unwrap();
 
         // Partition exactly at cutoff (7 days old) should be kept
@@ -276,6 +284,7 @@ mod tests {
             PartitionInfo::for_date("events", NaiveDate::from_ymd_opt(2024, 3, 7).unwrap()), // 8 days old - should drop
         ];
 
+        // Using days_ahead=1 to focus on testing the retention boundary behavior
         let (to_drop, _to_create) = policy.plan_maintenance(partitions, "events", 1, now);
 
         assert_eq!(to_drop.len(), 1);
@@ -287,7 +296,7 @@ mod tests {
 
     #[test]
     fn test_retention_policy_combined_drop_and_create() {
-        let policy = RetentionPolicy::new(7);
+        let policy = RetentionPolicy::new(RETENTION_DAYS);
         let now = Utc.with_ymd_and_hms(2024, 3, 15, 12, 0, 0).unwrap();
 
         let partitions = vec![
@@ -295,9 +304,10 @@ mod tests {
             PartitionInfo::for_date("events", NaiveDate::from_ymd_opt(2024, 3, 15).unwrap()), // today - keep
         ];
 
-        let (to_drop, to_create) = policy.plan_maintenance(partitions, "events", 3, now);
+        let (to_drop, to_create) =
+            policy.plan_maintenance(partitions, "events", DAYS_AHEAD_TO_CREATE, now);
 
         assert_eq!(to_drop.len(), 1);
-        assert_eq!(to_create.len(), 2); // tomorrow and day after
+        assert_eq!(to_create.len(), 6); // days 1-6 ahead
     }
 }
