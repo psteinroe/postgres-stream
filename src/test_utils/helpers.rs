@@ -1,3 +1,5 @@
+use std::sync::atomic::{AtomicU64, Ordering};
+
 use chrono::Utc;
 use etl::types::{Cell, Event, InsertEvent, PgLsn, TableId, TableRow};
 use uuid::Uuid;
@@ -6,11 +8,27 @@ use crate::config::StreamConfig;
 use crate::test_utils::TestDatabase;
 use crate::types::EventIdentifier;
 
+/// Counter for generating unique pipeline IDs across tests
+static PIPELINE_ID_COUNTER: AtomicU64 = AtomicU64::new(1000);
+
+/// Generate a unique pipeline ID for tests.
+/// Uses an atomic counter to ensure uniqueness across parallel test runs.
+#[must_use]
+pub fn unique_pipeline_id() -> u64 {
+    PIPELINE_ID_COUNTER.fetch_add(1, Ordering::SeqCst)
+}
+
 /// Helper to create a test stream configuration
 #[must_use]
 pub fn test_stream_config(db: &TestDatabase) -> StreamConfig {
+    test_stream_config_with_id(db, 1)
+}
+
+/// Helper to create a test stream configuration with a specific pipeline ID
+#[must_use]
+pub fn test_stream_config_with_id(db: &TestDatabase, id: u64) -> StreamConfig {
     StreamConfig {
-        id: 1,
+        id,
         pg_connection: db.config.clone(),
         batch: etl::config::BatchConfig {
             max_size: 100,

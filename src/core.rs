@@ -5,30 +5,68 @@
 use crate::{
     config::{PipelineConfig, SinkConfig},
     migrations::migrate_etl,
+    recovery::{handle_slot_recovery, is_slot_invalidation_error},
     sink::memory::MemorySink,
     stream::PgStream,
 };
+use etl::config::IntoConnectOptions;
 use etl::error::EtlResult;
 use etl::pipeline::Pipeline;
 use etl::store::both::postgres::PostgresStore;
+use sqlx::postgres::PgPoolOptions;
 use tokio::signal::unix::{SignalKind, signal};
-use tracing::{debug, info, warn};
+use tracing::{debug, error, info, warn};
 
 /// Starts the pipeline daemon with the provided configuration.
 ///
 /// Initializes the state store, creates PgStream as a destination,
 /// and starts the ETL pipeline. Handles graceful shutdown via
 /// SIGTERM and SIGINT signals.
+///
+/// If a replication slot is invalidated, this function will automatically
+/// recover by setting a failover checkpoint and restarting the pipeline.
 pub async fn start_pipeline_with_config(config: PipelineConfig) -> EtlResult<()> {
     info!("starting pgstream daemon");
 
     log_config(&config);
 
-    // Initialize state store for ETL pipeline state tracking
-    let state_store = PostgresStore::new(config.stream.id, config.stream.pg_connection.clone());
-
     // Run etl migrations before starting the pipeline
     migrate_etl(&config.stream.pg_connection).await?;
+
+    // Recovery loop - restarts the pipeline if slot is invalidated
+    loop {
+        let result = run_pipeline(&config).await;
+
+        match result {
+            Ok(()) => {
+                info!("pgstream daemon completed");
+                return Ok(());
+            }
+            Err(e) if is_slot_invalidation_error(&e) => {
+                warn!(error = %e, "replication slot invalidated, attempting recovery");
+
+                let pool = PgPoolOptions::new()
+                    .max_connections(1)
+                    .connect_with(config.stream.pg_connection.with_db())
+                    .await?;
+
+                if let Err(recovery_err) = handle_slot_recovery(&pool, config.stream.id).await {
+                    error!(error = %recovery_err, "slot recovery failed");
+                    return Err(e);
+                }
+                // Loop continues to restart the pipeline
+            }
+            Err(e) => {
+                return Err(e);
+            }
+        }
+    }
+}
+
+/// Runs the pipeline once. Returns when the pipeline completes or fails.
+async fn run_pipeline(config: &PipelineConfig) -> EtlResult<()> {
+    // Initialize state store for ETL pipeline state tracking
+    let state_store = PostgresStore::new(config.stream.id, config.stream.pg_connection.clone());
 
     // Create sink based on configuration
     let sink = match &config.sink {
@@ -43,17 +81,13 @@ pub async fn start_pipeline_with_config(config: PipelineConfig) -> EtlResult<()>
     info!("pgstream destination created successfully");
 
     // Convert StreamConfig to PipelineConfig
-    let pipeline_config = config.stream.into();
+    let pipeline_config = config.stream.clone().into();
 
     // Create ETL pipeline with PgStream as destination
     let pipeline = Pipeline::new(pipeline_config, state_store, pgstream_destination);
 
     // Start the pipeline with signal handling
-    start_pipeline_with_shutdown(pipeline).await?;
-
-    info!("pgstream daemon completed");
-
-    Ok(())
+    start_pipeline_with_shutdown(pipeline).await
 }
 
 /// Logs the daemon configuration (without secrets).
