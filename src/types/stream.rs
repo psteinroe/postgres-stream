@@ -4,6 +4,17 @@ use crate::types::EventIdentifier;
 
 pub type StreamId = PipelineId;
 
+pub trait SlotName {
+    fn slot_name(&self) -> String;
+}
+
+impl SlotName for StreamId {
+    /// Returns the slot name for the stream that `etl` uses under the hood.
+    fn slot_name(&self) -> String {
+        format!("supabase_etl_apply_{self}")
+    }
+}
+
 pub trait PublicationName {
     fn publication_name(&self) -> String;
 }

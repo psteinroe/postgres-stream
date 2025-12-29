@@ -6,6 +6,7 @@ pub mod maintenance;
 pub mod metrics;
 pub mod migrations;
 pub mod queries;
+pub mod recovery;
 pub mod sink;
 pub mod store;
 pub mod stream;

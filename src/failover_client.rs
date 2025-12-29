@@ -132,6 +132,7 @@ impl FailoverClient {
         self.client.is_closed()
     }
 
+    /// Gets events between two checkpoints (exclusive on both ends).
     pub async fn get_events_copy_stream(
         &self,
         from: &EventIdentifier,

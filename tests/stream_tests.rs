@@ -87,7 +87,7 @@ async fn test_failover_sink_failure_enters_failover_mode() {
             checkpoint_event_id,
         } => {
             assert_eq!(checkpoint_event_id.id, first_event_id.id);
-            // Compare timestamps at microsecond precision (PostgreSQL precision)
+            // Compare timestamps at microsecond precision (Postgres precision)
             assert_eq!(
                 checkpoint_event_id.created_at.timestamp_micros(),
                 first_event_id.created_at.timestamp_micros()

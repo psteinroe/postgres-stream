@@ -73,7 +73,7 @@ async fn test_store_persists_failover_status() {
             checkpoint_event_id,
         } => {
             assert_eq!(checkpoint_event_id.id, checkpoint_id.id);
-            // Compare timestamps at microsecond precision (PostgreSQL precision)
+            // Compare timestamps at microsecond precision (Postgres precision)
             assert_eq!(
                 checkpoint_event_id.created_at.timestamp_micros(),
                 checkpoint_id.created_at.timestamp_micros()
@@ -155,7 +155,7 @@ async fn test_store_caches_checkpoint_event() {
     // Ensure partition exists for today
     db.ensure_today_partition().await;
 
-    // Insert event into database and fetch back the timestamp (PostgreSQL microsecond precision)
+    // Insert event into database and fetch back the timestamp (Postgres microsecond precision)
     let event_id = Uuid::new_v4();
     let payload = serde_json::json!({"test": "data"});
 

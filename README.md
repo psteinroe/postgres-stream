@@ -7,7 +7,7 @@ Reliably stream Postgres table changes to external systems (queues, webhooks, et
 1. **User manages subscriptions** directly in the database (`pgstream.subscriptions` table)
 2. **Subscription changes automatically create database triggers** on the target tables
 3. **Application events fire the managed triggers**, which insert into a partitioned `events` table
-4. **The daemon streams events** via Postgres logical replication and delivers them to your sink
+4. **Postgres Stream streams events** via logical replication and delivers them to your sink
 
 ```mermaid
 flowchart LR
@@ -16,7 +16,7 @@ flowchart LR
         B -->|insert<br/>into| C[events<br/>partitioned<br/>20250112..]
         C -->|logical<br/>replication| D[replication<br/>slot]
     end
-    D -->|streams| E[daemon<br/>binary]
+    D -->|streams| E[Postgres<br/>Stream]
     E -->|delivers| F[sink<br/>queue/http]
 
     style Postgres fill:#dbeafe,stroke:#2563eb,stroke-width:3px
@@ -83,7 +83,8 @@ execute procedure pgstream._publish_after_insert_on_users();
 
 - **Single binary** - No complex infrastructure or high-availability destinations required
 - **Postgres-native durability** - Events are stored in the database, WAL can be released immediately
-- **Automatic failover** - Daemon queries the `events` table to replay missed events after recovery
+- **Automatic failover** - Queries the `events` table to replay missed events after recovery
+- **Automatic recovery** - Postgres Stream automatically recovers from an invalidated replication slot
 - **No data loss** - As long as downtime is less than partition retention (7 days by default)
 
 ## Drawbacks
@@ -122,10 +123,10 @@ sink:
   type: memory  # Built-in test sink
 ```
 
-### 3. Run the Daemon
+### 3. Run the Binary
 
 ```bash
-# Start the daemon
+# Start Postgres Stream
 postgres-stream
 
 # Or with Docker
@@ -293,28 +294,39 @@ Common use cases:
 
 ## How Failover Works
 
-**Scenario:** Your message queue goes down for 2 hours.
+When the sink fails (e.g., queue goes down), Postgres Stream:
 
-```
-10:00 - Queue fails, event #1000 can't be delivered
-10:00 - Daemon saves checkpoint: event #1000 ID in database
-10:00 - Daemon continues consuming replication stream (new events still written to events table)
-12:00 - Queue recovers
-12:00 - Daemon tries checkpoint event again → succeeds
-12:00 - Daemon uses COPY to stream all events from table between checkpoint and current batch
-12:00 - Replays all missed events in order
-12:01 - Returns to normal streaming mode
-```
+1. Saves the failed event's ID as a checkpoint
+2. Continues consuming the replication stream (events still written to table)
+3. Periodically retries delivering the checkpoint event
+4. On success, uses `COPY` to stream all events between checkpoint and current position
+5. Replays missed events in order, then returns to normal streaming
 
 **Guarantees:**
-- No events lost (if downtime < 7 days partition retention)
-- Events delivered at least once (may retry on failure)
-- Order preserved within daily partitions
-- No WAL retention required (events are in table, not WAL)
+- No events lost (as long as downtime < partition retention)
+- Events delivered at least once
+- Order preserved within partitions
+- No WAL retention required (events stored in table)
+
+## How Slot Recovery Works
+
+When the replication slot is invalidated (WAL exceeded `max_slot_wal_keep_size`), Postgres Stream:
+
+1. Detects the "can no longer get changes from replication slot" error
+2. Queries `confirmed_flush_lsn` from the invalidated slot (Postgres preserves this)
+3. Finds the first event with `lsn > confirmed_flush_lsn`
+4. Sets a failover checkpoint at that event
+5. Drops the invalidated slot and creates a new one
+6. Triggers failover replay from checkpoint to current position
+
+**Guarantees:**
+- Automatic recovery without operator intervention
+- No events lost (events stored in table, not dependent on WAL)
+- Works as long as events are within partition retention
 
 ## Automated Partition Management
 
-The daemon automatically manages daily partitions in the background:
+Postgres Stream automatically manages daily partitions in the background:
 
 **Retention policy:**
 - **Creates partitions** 3 days in advance (today, tomorrow, day after)
