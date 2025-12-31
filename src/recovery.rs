@@ -6,7 +6,12 @@
 //! 2. Query the `confirmed_flush_lsn` from the invalidated slot
 //! 3. Find the first event after that LSN
 //! 4. Set a failover checkpoint to trigger event replay
-//! 5. Drop the invalidated slot so a new one can be created
+//! 5. Drop the invalidated slot and create a new one
+//!
+//! The new slot is created immediately during recovery (not by ETL) to ensure that:
+//! - ETL sees an existing slot and skips the "Init state" validation
+//! - Table sync workers are NOT restarted (tables stay in Ready state)
+//! - Only the failover mechanism replays the missed events
 
 use chrono::{DateTime, Utc};
 use etl::error::{EtlError, EtlResult};
@@ -32,19 +37,22 @@ pub fn is_slot_invalidation_error(error: &EtlError) -> bool {
 /// 2. Finds the first event with LSN > confirmed_flush_lsn
 /// 3. Sets failover checkpoint in pgstream.streams (transactional)
 /// 4. Commits the transaction (checkpoint is now durable)
-/// 5. Drops the invalidated slot (non-transactional, done AFTER commit)
+/// 5. Drops the invalidated slot and creates a new one (non-transactional, done AFTER commit)
 ///
-/// The slot drop is done after commit because `pg_drop_replication_slot` is not
-/// transactional - it takes effect immediately regardless of transaction state.
-/// By setting the checkpoint first and committing, we ensure that if the system
-/// crashes after commit but before the slot drop:
+/// The slot operations are done after commit because they are not transactional -
+/// they take effect immediately regardless of transaction state. By setting the
+/// checkpoint first and committing, we ensure that if the system crashes after
+/// commit but before slot operations:
 /// - The checkpoint is already saved
-/// - On restart, the pipeline will fail again (slot still invalidated)
-/// - Recovery will run again, see the slot, and drop it (idempotent)
+/// - On restart, the pipeline will fail again (slot still invalidated or missing)
+/// - Recovery will run again and handle the slot (idempotent)
+///
+/// The new slot is created immediately (not by ETL) to ensure:
+/// - ETL sees an existing slot and skips the "Init state" validation
+/// - Table sync workers are NOT restarted (tables stay in Ready state)
+/// - Only the failover mechanism replays events from the checkpoint
 ///
 /// After this function returns Ok, the pipeline should be restarted.
-/// The ETL crate will create a new slot, and the failover mechanism will
-/// replay events from the checkpoint to fill the gap.
 pub async fn handle_slot_recovery(pool: &PgPool, stream_id: u64) -> EtlResult<()> {
     let slot_name = stream_id.slot_name();
     info!(
@@ -92,12 +100,6 @@ pub async fn handle_slot_recovery(pool: &PgPool, stream_id: u64) -> EtlResult<()
     .await?;
 
     // 3. Set failover checkpoint BEFORE dropping slot (crash-safe ordering)
-    // NOTE: We intentionally do NOT clear ETL table replication state.
-    // The table is already marked as synced (SyncDone) at some LSN from the old slot.
-    // When the new slot is created, it starts from current WAL which has higher LSNs.
-    // Events from the new slot will have LSN > old sync LSN, so they'll be accepted.
-    // If we cleared the state, ETL would do a full table sync, copying ALL events
-    // from the events table - which we don't want since we handle recovery via failover.
     if let Some((id, created_at)) = checkpoint {
         info!(
             event_id = %id,
@@ -137,6 +139,23 @@ pub async fn handle_slot_recovery(pool: &PgPool, stream_id: u64) -> EtlResult<()
             slot_name = slot_name,
             error = %e,
             "failed to drop slot (may already be dropped)"
+        ),
+    }
+
+    // 6. Create new slot immediately so ETL doesn't trigger table sync workers
+    // When ETL starts and sees an existing slot, it skips the "Init state" validation
+    // and doesn't restart table sync workers. Tables stay in Ready state.
+    let create_result = sqlx::query("SELECT pg_create_logical_replication_slot($1, 'pgoutput')")
+        .bind(&slot_name)
+        .execute(pool)
+        .await;
+
+    match &create_result {
+        Ok(_) => info!(slot_name = slot_name, "created new replication slot"),
+        Err(e) => warn!(
+            slot_name = slot_name,
+            error = %e,
+            "failed to create slot (may already exist)"
         ),
     }
 
