@@ -145,19 +145,12 @@ pub async fn handle_slot_recovery(pool: &PgPool, stream_id: u64) -> EtlResult<()
     // 6. Create new slot immediately so ETL doesn't trigger table sync workers
     // When ETL starts and sees an existing slot, it skips the "Init state" validation
     // and doesn't restart table sync workers. Tables stay in Ready state.
-    let create_result = sqlx::query("SELECT pg_create_logical_replication_slot($1, 'pgoutput')")
+    sqlx::query("SELECT pg_create_logical_replication_slot($1, 'pgoutput')")
         .bind(&slot_name)
         .execute(pool)
-        .await;
+        .await?;
 
-    match &create_result {
-        Ok(_) => info!(slot_name = slot_name, "created new replication slot"),
-        Err(e) => warn!(
-            slot_name = slot_name,
-            error = %e,
-            "failed to create slot (may already exist)"
-        ),
-    }
+    info!(slot_name = slot_name, "created new replication slot");
 
     info!("slot recovery complete");
     Ok(())
