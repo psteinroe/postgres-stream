@@ -1,5 +1,5 @@
 use chrono::Utc;
-use postgres_stream::failover_client::FailoverClient;
+use postgres_stream::replay_client::ReplayClient;
 use postgres_stream::store::StreamStore;
 use postgres_stream::test_utils::{
     TestDatabase, create_postgres_store, insert_events_to_db, test_stream_config,
@@ -10,10 +10,10 @@ use uuid::Uuid;
 // Connection tests
 
 #[tokio::test(flavor = "multi_thread")]
-async fn test_failover_client_connect_no_tls() {
+async fn test_replay_client_connect_no_tls() {
     let db = TestDatabase::spawn().await;
 
-    let client = FailoverClient::connect(1, db.config.clone())
+    let client = ReplayClient::connect(1, db.config.clone())
         .await
         .expect("Failed to connect without TLS");
 
@@ -21,10 +21,10 @@ async fn test_failover_client_connect_no_tls() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn test_failover_client_connection_detection() {
+async fn test_replay_client_connection_detection() {
     let db = TestDatabase::spawn().await;
 
-    let client = FailoverClient::connect(1, db.config.clone())
+    let client = ReplayClient::connect(1, db.config.clone())
         .await
         .expect("Failed to connect");
 
@@ -51,7 +51,7 @@ async fn test_update_checkpoint_persists() {
         .await
         .unwrap();
 
-    let client = FailoverClient::connect(1, db.config.clone())
+    let client = ReplayClient::connect(1, db.config.clone())
         .await
         .expect("Failed to connect");
 
@@ -110,7 +110,7 @@ async fn test_update_checkpoint_multiple_times() {
         .await
         .unwrap();
 
-    let client = FailoverClient::connect(1, db.config.clone())
+    let client = ReplayClient::connect(1, db.config.clone())
         .await
         .expect("Failed to connect");
 
@@ -149,7 +149,7 @@ async fn test_get_events_copy_stream_empty_range() {
     let db = TestDatabase::spawn().await;
     db.ensure_today_partition().await;
 
-    let client = FailoverClient::connect(1, db.config.clone())
+    let client = ReplayClient::connect(1, db.config.clone())
         .await
         .expect("Failed to connect");
 
@@ -184,7 +184,7 @@ async fn test_get_events_copy_stream_with_events() {
     let db = TestDatabase::spawn().await;
     db.ensure_today_partition().await;
 
-    let client = FailoverClient::connect(1, db.config.clone())
+    let client = ReplayClient::connect(1, db.config.clone())
         .await
         .expect("Failed to connect");
 
@@ -229,7 +229,7 @@ async fn test_get_events_copy_stream_boundary_conditions() {
     let db = TestDatabase::spawn().await;
     db.ensure_today_partition().await;
 
-    let client = FailoverClient::connect(1, db.config.clone())
+    let client = ReplayClient::connect(1, db.config.clone())
         .await
         .expect("Failed to connect");
 
@@ -337,7 +337,7 @@ async fn test_get_events_copy_stream_filters_by_stream_id() {
         .unwrap();
     }
 
-    let client = FailoverClient::connect(1, db.config.clone())
+    let client = ReplayClient::connect(1, db.config.clone())
         .await
         .expect("Failed to connect");
 
@@ -379,7 +379,7 @@ async fn test_connection_survives_multiple_operations() {
     let db = TestDatabase::spawn().await;
     db.ensure_today_partition().await;
 
-    let client = FailoverClient::connect(1, db.config.clone())
+    let client = ReplayClient::connect(1, db.config.clone())
         .await
         .expect("Failed to connect");
 

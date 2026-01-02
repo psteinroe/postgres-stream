@@ -13,10 +13,10 @@ use tracing::info;
 use crate::{
     concurrency::TimeoutBatchStream,
     config::StreamConfig,
-    failover_client::FailoverClient,
     maintenance::run_maintenance,
     metrics,
     migrations::migrate_pgstream,
+    replay_client::ReplayClient,
     sink::Sink as SinkTrait,
     store::StreamStore,
     types::{
@@ -191,11 +191,11 @@ where
             checkpoint_event.id
         );
 
-        let failover =
-            FailoverClient::connect(self.config.id, self.config.pg_connection.clone()).await?;
+        let replay_client =
+            ReplayClient::connect(self.config.id, self.config.pg_connection.clone()).await?;
         let table_schema = self.store.get_events_table_schema().await?;
 
-        let replay_stream = failover
+        let replay_stream = replay_client
             .get_events_copy_stream(&checkpoint_event.id, current_batch_event_id)
             .await?;
         let replay_stream = TableCopyStream::wrap(replay_stream, &table_schema.column_schemas, 1);
@@ -219,7 +219,7 @@ where
             let lag_milliseconds = (Utc::now() - last_event_timestamp).num_milliseconds();
             metrics::record_processing_lag(self.config.id, lag_milliseconds);
 
-            failover.update_checkpoint(&last_event_id).await?;
+            replay_client.update_checkpoint(&last_event_id).await?;
         }
 
         // Record successful failover recovery

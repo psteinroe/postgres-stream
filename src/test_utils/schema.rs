@@ -27,7 +27,7 @@ pub async fn init_events_schema(
     let table_id = TableId::new(row.0 as u32);
 
     // Manually create the schema for the events table
-    // Column order MUST match the COPY query in failover_client.rs:
+    // Column order MUST match the COPY query in replay_client.rs:
     // select id, payload, metadata, stream_id, created_at, lsn
     let schema = TableSchema {
         id: table_id,

@@ -83,9 +83,24 @@ execute procedure pgstream._publish_after_insert_on_users();
 
 - **Single binary** - No complex infrastructure or high-availability destinations required
 - **Postgres-native durability** - Events are stored in the database, WAL can be released immediately
-- **Automatic failover** - Queries the `events` table to replay missed events after recovery
-- **Automatic recovery** - Postgres Stream automatically recovers from an invalidated replication slot
 - **No data loss** - As long as downtime is less than partition retention (7 days by default)
+
+### Automatic Recovery
+
+Postgres Stream automatically handles two failure scenarios without operator intervention:
+
+**Sink failure** (queue unavailable, webhook fails, etc.)
+- Checkpoints the failed event and continues consuming the replication stream
+- Periodically retries delivering the checkpoint event
+- When sink recovers, replays all missed events via `COPY` from the events table
+
+**Slot invalidation** (WAL exceeded `max_slot_wal_keep_size`)
+- Detects the "can no longer get changes from replication slot" error
+- Queries `confirmed_flush_lsn` from the invalidated slot to find the last processed position
+- Sets a failover checkpoint and creates a new slot
+- When replication resumes, replays missed events from the checkpoint
+
+Both scenarios use the same replay mechanism: events are read directly from the `events` table (not WAL), guaranteeing no data loss as long as events are within partition retention.
 
 ## Drawbacks
 
@@ -316,8 +331,9 @@ When the replication slot is invalidated (WAL exceeded `max_slot_wal_keep_size`)
 2. Queries `confirmed_flush_lsn` from the invalidated slot (Postgres preserves this)
 3. Finds the first event with `lsn > confirmed_flush_lsn`
 4. Sets a failover checkpoint at that event
-5. Drops the invalidated slot and creates a new one
-6. Triggers failover replay from checkpoint to current position
+5. Drops the invalidated slot
+6. Restarts the pipeline (ETL creates a fresh slot)
+7. When replication events arrive, triggers failover replay from checkpoint
 
 **Guarantees:**
 - Automatic recovery without operator intervention
