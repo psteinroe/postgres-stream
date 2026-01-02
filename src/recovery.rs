@@ -6,12 +6,16 @@
 //! 2. Query the `confirmed_flush_lsn` from the invalidated slot
 //! 3. Find the first event after that LSN
 //! 4. Set a failover checkpoint to trigger event replay
-//! 5. Drop the invalidated slot and create a new one
+//! 5. Delete ETL replication state (triggers fresh slot creation)
+//! 6. Drop the invalidated slot
 //!
-//! The new slot is created immediately during recovery (not by ETL) to ensure that:
-//! - ETL sees an existing slot and skips the "Init state" validation
-//! - Table sync workers are NOT restarted (tables stay in Ready state)
-//! - Only the failover mechanism replays the missed events
+//! After recovery, ETL will create a new slot and run DataSync (table sync workers).
+//! The stream's `write_table_rows()` returns `Ok(())` to skip DataSync entirely.
+//! When the first replication event arrives with the failover checkpoint set,
+//! `handle_failover()` will COPY the missed events from the events table.
+//!
+//! This design is crash-safe: if the system crashes after setting the checkpoint,
+//! the checkpoint persists and will be used on restart regardless of slot state.
 
 use chrono::{DateTime, Utc};
 use etl::error::{EtlError, EtlResult};
@@ -32,25 +36,20 @@ pub fn is_slot_invalidation_error(error: &EtlError) -> bool {
 
 /// Handles recovery from an invalidated replication slot.
 ///
-/// This function is designed to be crash-safe:
+/// This function is crash-safe:
 /// 1. Queries `confirmed_flush_lsn` from the invalidated slot
 /// 2. Finds the first event with LSN > confirmed_flush_lsn
 /// 3. Sets failover checkpoint in pgstream.streams (transactional)
 /// 4. Commits the transaction (checkpoint is now durable)
-/// 5. Drops the invalidated slot and creates a new one (non-transactional, done AFTER commit)
+/// 5. Drops the invalidated slot (non-transactional, done AFTER commit)
 ///
-/// The slot operations are done after commit because they are not transactional -
-/// they take effect immediately regardless of transaction state. By setting the
-/// checkpoint first and committing, we ensure that if the system crashes after
-/// commit but before slot operations:
-/// - The checkpoint is already saved
-/// - On restart, the pipeline will fail again (slot still invalidated or missing)
-/// - Recovery will run again and handle the slot (idempotent)
+/// The slot drop is done after commit because `pg_drop_replication_slot` is not
+/// transactional. By setting the checkpoint first, we ensure crash safety:
+/// - If crash before commit: checkpoint not set, slot still exists, recovery reruns
+/// - If crash after commit but before drop: checkpoint is saved, slot drop will happen on next recovery
 ///
-/// The new slot is created immediately (not by ETL) to ensure:
-/// - ETL sees an existing slot and skips the "Init state" validation
-/// - Table sync workers are NOT restarted (tables stay in Ready state)
-/// - Only the failover mechanism replays events from the checkpoint
+/// After recovery, ETL will create a new slot and may trigger DataSync. The stream's
+/// `tick()` function handles this by filtering events before the checkpoint.
 ///
 /// After this function returns Ok, the pipeline should be restarted.
 pub async fn handle_slot_recovery(pool: &PgPool, stream_id: u64) -> EtlResult<()> {
@@ -122,10 +121,23 @@ pub async fn handle_slot_recovery(pool: &PgPool, stream_id: u64) -> EtlResult<()
         info!("no events found after confirmed_flush_lsn, pipeline will start fresh");
     }
 
-    // 4. Commit the transaction - checkpoint is now durable
+    // 4. Delete ETL replication state so ETL will create a fresh slot on restart
+    // This triggers DataSync, but we skip it by returning Ok(()) from write_table_rows.
+    // The failover checkpoint ensures we COPY missed events when replication starts.
+    let deleted = sqlx::query("DELETE FROM etl.replication_state WHERE pipeline_id = $1")
+        .bind(stream_id as i64)
+        .execute(&mut *tx)
+        .await?;
+
+    info!(
+        rows_deleted = deleted.rows_affected(),
+        "deleted ETL replication state to trigger fresh slot creation"
+    );
+
+    // 5. Commit the transaction - checkpoint is now durable
     tx.commit().await?;
 
-    // 5. Drop the invalidated slot AFTER commit (non-transactional operation)
+    // 6. Drop the invalidated slot AFTER commit (non-transactional operation)
     // This ordering ensures crash safety: if we crash here, the checkpoint is
     // already saved, and the next recovery attempt will simply drop the slot.
     let drop_result = sqlx::query("SELECT pg_drop_replication_slot($1)")
@@ -142,17 +154,7 @@ pub async fn handle_slot_recovery(pool: &PgPool, stream_id: u64) -> EtlResult<()
         ),
     }
 
-    // 6. Create new slot immediately so ETL doesn't trigger table sync workers
-    // When ETL starts and sees an existing slot, it skips the "Init state" validation
-    // and doesn't restart table sync workers. Tables stay in Ready state.
-    sqlx::query("SELECT pg_create_logical_replication_slot($1, 'pgoutput')")
-        .bind(&slot_name)
-        .execute(pool)
-        .await?;
-
-    info!(slot_name = slot_name, "created new replication slot");
-
-    info!("slot recovery complete");
+    info!("slot recovery complete, ETL will create new slot on restart");
     Ok(())
 }
 

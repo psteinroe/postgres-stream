@@ -241,8 +241,7 @@ async fn test_pipeline_recovers_from_invalidated_slot() {
     // Create a shared sink to track events across pipeline restarts
     let sink = MemorySink::new();
 
-    // Step 1: Start pipeline FIRST, then insert events
-    // (events must be inserted AFTER slot creation to be captured via replication)
+    // Step 1: Start pipeline, wait for replication to be ready, then insert test events
     {
         let state_store = PostgresStore::new(pipeline_id, db.config.clone());
         let pgstream = PgStream::create(stream_config.clone(), sink.clone(), state_store.clone())
@@ -254,12 +253,16 @@ async fn test_pipeline_recovers_from_invalidated_slot() {
 
         pipeline.start().await.expect("Failed to start pipeline");
 
-        // Wait for table sync to complete (tables reach 'sync_done' or 'ready' state)
-        // sync_done means initial data copy is complete, ready means apply worker confirmed it
-        // We accept sync_done because the transition to ready happens asynchronously via apply worker
-        let mut sync_complete = false;
-        let mut last_states = Vec::new();
+        // Wait for slot to be created and tables to reach sync_done state
+        let mut tables_synced = false;
         for _ in 0..60 {
+            let slot_exists: bool = sqlx::query_scalar(&format!(
+                "SELECT EXISTS(SELECT 1 FROM pg_replication_slots WHERE slot_name = '{slot_name}')"
+            ))
+            .fetch_one(&db.pool)
+            .await
+            .unwrap();
+
             let states: Vec<String> = sqlx::query_scalar(
                 "SELECT state::text FROM etl.replication_state WHERE pipeline_id = $1 AND is_current = true",
             )
@@ -268,20 +271,53 @@ async fn test_pipeline_recovers_from_invalidated_slot() {
             .await
             .unwrap_or_default();
 
-            last_states = states.clone();
-            // Accept sync_done or ready - both indicate table sync workers are done
-            if !states.is_empty() && states.iter().all(|s| s == "sync_done" || s == "ready") {
-                sync_complete = true;
+            // Wait for sync_done - the transition to ready happens when we process replication events
+            if slot_exists
+                && !states.is_empty()
+                && states.iter().all(|s| s == "sync_done" || s == "ready")
+            {
+                tables_synced = true;
                 break;
             }
             tokio::time::sleep(Duration::from_millis(500)).await;
         }
         assert!(
-            sync_complete,
-            "Tables should complete sync before continuing, current states: {last_states:?}"
+            tables_synced,
+            "Slot should be created and tables should be synced"
         );
 
-        // Now insert events - these will be captured by the slot
+        // Insert a trigger event to transition tables from sync_done to ready
+        // This event is in the replication stream (slot exists) and will trigger the transition
+        sqlx::query("INSERT INTO pgstream.events (id, payload, stream_id, created_at, lsn) VALUES (gen_random_uuid(), $1, $2, now(), pg_current_wal_lsn())")
+            .bind(serde_json::json!({"trigger_ready": true}))
+            .bind(pipeline_id as i64)
+            .execute(&db.pool)
+            .await
+            .unwrap();
+
+        // Wait for tables to reach ready state
+        let mut replication_ready = false;
+        for _ in 0..30 {
+            let states: Vec<String> = sqlx::query_scalar(
+                "SELECT state::text FROM etl.replication_state WHERE pipeline_id = $1 AND is_current = true",
+            )
+            .bind(pipeline_id as i64)
+            .fetch_all(&db.pool)
+            .await
+            .unwrap_or_default();
+
+            if !states.is_empty() && states.iter().all(|s| s == "ready") {
+                replication_ready = true;
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(500)).await;
+        }
+        assert!(
+            replication_ready,
+            "Tables should reach ready state after processing replication event"
+        );
+
+        // Insert test events - these will be captured by the slot
         for i in 0..5 {
             sqlx::query("insert into pgstream.events (id, payload, stream_id, created_at, lsn) values (gen_random_uuid(), $1, $2, now(), pg_current_wal_lsn())")
                 .bind(serde_json::json!({"before_shutdown": i}))
@@ -359,7 +395,7 @@ async fn test_pipeline_recovers_from_invalidated_slot() {
             .unwrap();
     }
 
-    // Record replication states BEFORE recovery - they should be in sync_done or ready state
+    // Record that replication states exist BEFORE recovery
     let states_before: Vec<String> = sqlx::query_scalar(
         "SELECT state::text FROM etl.replication_state WHERE pipeline_id = $1 AND is_current = true",
     )
@@ -372,20 +408,13 @@ async fn test_pipeline_recovers_from_invalidated_slot() {
         !states_before.is_empty(),
         "Should have replication state records before recovery"
     );
-    for state in &states_before {
-        assert!(
-            state == "sync_done" || state == "ready",
-            "All tables should be in sync_done or ready state before recovery, got: {state}"
-        );
-    }
 
-    // Step 5: Call slot recovery to set up failover checkpoint and create new slot
+    // Step 5: Call slot recovery to set up failover checkpoint and drop old slot
     handle_slot_recovery(&db.pool, pipeline_id)
         .await
         .expect("Slot recovery should succeed");
 
-    // Verify replication states are PRESERVED (still sync_done/ready, not reset to init)
-    // This is critical: if states were reset to init, table sync workers would restart
+    // Verify replication states are DELETED by recovery (triggers fresh slot creation)
     let states_after: Vec<String> = sqlx::query_scalar(
         "SELECT state::text FROM etl.replication_state WHERE pipeline_id = $1 AND is_current = true",
     )
@@ -394,29 +423,22 @@ async fn test_pipeline_recovers_from_invalidated_slot() {
     .await
     .expect("Should fetch replication states");
 
-    assert_eq!(
-        states_before.len(),
-        states_after.len(),
-        "Replication state records should be preserved"
+    assert!(
+        states_after.is_empty(),
+        "Replication state records should be deleted by recovery to trigger fresh slot creation"
     );
-    for state in &states_after {
-        assert!(
-            state == "sync_done" || state == "ready",
-            "All tables should still be in sync_done/ready state after recovery (not reset to init), got: {state}"
-        );
-    }
 
-    // Verify new slot was created by recovery (not left for ETL to create)
-    let slot_exists_after_recovery: bool = sqlx::query_scalar(&format!(
-        "SELECT EXISTS(SELECT 1 FROM pg_replication_slots WHERE slot_name = '{slot_name}' AND wal_status != 'lost')"
+    // Verify old slot was dropped (ETL will create new one on restart)
+    let old_slot_dropped: bool = sqlx::query_scalar(&format!(
+        "SELECT NOT EXISTS(SELECT 1 FROM pg_replication_slots WHERE slot_name = '{slot_name}')"
     ))
     .fetch_one(&db.pool)
     .await
     .unwrap();
 
     assert!(
-        slot_exists_after_recovery,
-        "Recovery should create a new healthy slot immediately"
+        old_slot_dropped,
+        "Old invalidated slot should be dropped by recovery"
     );
 
     // Verify the checkpoint was saved to the database
@@ -455,7 +477,21 @@ async fn test_pipeline_recovers_from_invalidated_slot() {
         "Checkpoint event should exist in events table"
     );
 
-    // Step 6: Restart pipeline - verify it uses the existing slot (no table sync workers)
+    // At this point, the stream is in FAILOVER state (checkpoint set above).
+    // We verified: checkpoint_id and checkpoint_ts are set in pgstream.streams.
+
+    // Reset system settings BEFORE restarting pipeline, otherwise new slot will be invalidated
+    sqlx::query("alter system reset max_slot_wal_keep_size")
+        .execute(&db.pool)
+        .await
+        .unwrap();
+    sqlx::query("select pg_reload_conf()")
+        .execute(&db.pool)
+        .await
+        .unwrap();
+
+    // Step 6: Restart pipeline - ETL will create a new slot and run DataSync (which we skip)
+    // When replication events arrive, handle_failover() will COPY missed events and clear checkpoint
     {
         let state_store = PostgresStore::new(pipeline_id, db.config.clone());
         let pgstream = PgStream::create(stream_config.clone(), sink.clone(), state_store.clone())
@@ -465,64 +501,116 @@ async fn test_pipeline_recovers_from_invalidated_slot() {
         let pipeline_config: etl::config::PipelineConfig = stream_config.into();
         let mut pipeline = etl::pipeline::Pipeline::new(pipeline_config, state_store, pgstream);
 
-        // This should succeed - ETL sees existing slot, skips Init validation
         pipeline
             .start()
             .await
             .expect("Pipeline should start after slot recovery");
 
-        // Wait for pipeline to process
-        tokio::time::sleep(Duration::from_secs(1)).await;
+        // Wait for slot to be created and tables to reach sync_done state
+        let mut tables_synced = false;
+        for _ in 0..60 {
+            let slot_exists: bool = sqlx::query_scalar(&format!(
+                "SELECT EXISTS(SELECT 1 FROM pg_replication_slots WHERE slot_name = '{slot_name}')"
+            ))
+            .fetch_one(&db.pool)
+            .await
+            .unwrap();
 
-        // Graceful shutdown - the pipeline might have already exited if failover
-        // completed, so we allow SendError
+            let states: Vec<String> = sqlx::query_scalar(
+                "SELECT state::text FROM etl.replication_state WHERE pipeline_id = $1 AND is_current = true",
+            )
+            .bind(pipeline_id as i64)
+            .fetch_all(&db.pool)
+            .await
+            .unwrap_or_default();
+
+            if slot_exists
+                && !states.is_empty()
+                && states.iter().all(|s| s == "sync_done" || s == "ready")
+            {
+                tables_synced = true;
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(500)).await;
+        }
+        assert!(
+            tables_synced,
+            "Slot should be created and tables should reach sync_done after recovery"
+        );
+
+        // Insert a trigger event to transition tables from sync_done to ready
+        sqlx::query("INSERT INTO pgstream.events (id, payload, stream_id, created_at, lsn) VALUES (gen_random_uuid(), $1, $2, now(), pg_current_wal_lsn())")
+            .bind(serde_json::json!({"trigger_ready_after_recovery": true}))
+            .bind(pipeline_id as i64)
+            .execute(&db.pool)
+            .await
+            .unwrap();
+
+        // Wait for tables to reach ready state
+        let mut replication_ready = false;
+        for _ in 0..30 {
+            let states: Vec<String> = sqlx::query_scalar(
+                "SELECT state::text FROM etl.replication_state WHERE pipeline_id = $1 AND is_current = true",
+            )
+            .bind(pipeline_id as i64)
+            .fetch_all(&db.pool)
+            .await
+            .unwrap_or_default();
+
+            if !states.is_empty() && states.iter().all(|s| s == "ready") {
+                replication_ready = true;
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(500)).await;
+        }
+        assert!(
+            replication_ready,
+            "Tables should reach ready state after recovery"
+        );
+
+        // Graceful shutdown
         let shutdown_tx = pipeline.shutdown_tx();
         let _ = shutdown_tx.shutdown();
         let _ = pipeline.wait().await;
     }
 
-    // Verify replication states are STILL in sync_done/ready state after pipeline restart
-    // If table sync workers had started, states would be reset to init or data_sync
-    let states_final: Vec<String> = sqlx::query_scalar(
-        "SELECT state::text FROM etl.replication_state WHERE pipeline_id = $1 AND is_current = true",
-    )
-    .bind(pipeline_id as i64)
-    .fetch_all(&db.pool)
-    .await
-    .expect("Should fetch replication states");
-
-    for state in &states_final {
-        assert!(
-            state == "sync_done" || state == "ready",
-            "All tables should still be in sync_done/ready state after pipeline restart - table sync workers should NOT have been triggered, got: {state}"
-        );
-    }
-
-    // Verify the slot is still healthy
-    let slot_still_healthy: bool = sqlx::query_scalar(&format!(
-        "SELECT EXISTS(SELECT 1 FROM pg_replication_slots WHERE slot_name = '{slot_name}' AND wal_status != 'lost')"
+    // Verify the slot exists and is healthy
+    let slot_info: Option<(String, Option<String>)> = sqlx::query_as(&format!(
+        "SELECT slot_name, wal_status FROM pg_replication_slots WHERE slot_name = '{slot_name}'"
     ))
-    .fetch_one(&db.pool)
+    .fetch_optional(&db.pool)
     .await
     .unwrap();
 
     assert!(
-        slot_still_healthy,
-        "Slot should remain healthy after pipeline restart"
+        slot_info.is_some(),
+        "Slot should exist after pipeline restart"
     );
 
-    // Note: The failover checkpoint is cleared after successful failover recovery
-    // (see stream.rs). We already verified it was set after handle_slot_recovery.
-    // If the pipeline ran failover successfully, the checkpoint will be cleared,
-    // which is correct behavior.
+    // Verify the slot is healthy (not invalidated)
+    if let Some((_, wal_status)) = slot_info {
+        assert!(
+            wal_status.as_deref() != Some("lost"),
+            "Slot should remain healthy after pipeline restart, got wal_status: {wal_status:?}"
+        );
+    }
 
-    // Cleanup
-    sqlx::query("alter system reset max_slot_wal_keep_size")
-        .execute(&db.pool)
-        .await
-        .unwrap();
-    sqlx::query("select pg_reload_conf()")
-        .execute(&db.pool)
-        .await
-        .unwrap();
+    // Verify the stream transitioned from Failover back to Healthy
+    // After successful failover recovery, the checkpoint should be cleared
+    let final_stream_state: (Option<String>, Option<chrono::DateTime<chrono::Utc>>) = sqlx::query_as(
+        "SELECT failover_checkpoint_id, failover_checkpoint_ts FROM pgstream.streams WHERE id = $1",
+    )
+    .bind(pipeline_id as i64)
+    .fetch_one(&db.pool)
+    .await
+    .expect("Should find stream row");
+
+    assert!(
+        final_stream_state.0.is_none(),
+        "Failover checkpoint should be cleared after successful recovery (stream should be Healthy)"
+    );
+    assert!(
+        final_stream_state.1.is_none(),
+        "Failover checkpoint timestamp should be cleared after successful recovery"
+    );
 }
