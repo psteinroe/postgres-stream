@@ -19,8 +19,10 @@ use crate::{
     migrations::migrate_pgstream,
     sink::Sink as SinkTrait,
     store::StreamStore,
-    types::{EventIdentifier, StreamStatus, TriggeredEvent},
-    types::{convert_events_from_table_rows, convert_stream_events_from_events},
+    types::{
+        EventIdentifier, StreamStatus, TriggeredEvent, convert_events_from_table_rows,
+        convert_stream_events_from_events,
+    },
     utils::task::TaskHandle,
 };
 
@@ -250,17 +252,11 @@ where
     async fn write_table_rows(
         &self,
         _table_id: TableId,
-        table_rows: Vec<TableRow>,
+        _table_rows: Vec<TableRow>,
     ) -> EtlResult<()> {
-        if table_rows.is_empty() {
-            return Ok(());
-        }
-
-        let schema = self.store.get_events_table_schema().await?;
-        let stream_events = convert_events_from_table_rows(table_rows, &schema.column_schemas)?;
-
-        self.tick(stream_events).await?;
-
+        // DataSync copies historical events - we don't need to process them.
+        // We only process new events from the replication stream via write_events.
+        // In failover mode, handle_failover() uses COPY to get missed events.
         Ok(())
     }
 

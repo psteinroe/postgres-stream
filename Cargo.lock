@@ -524,7 +524,7 @@ dependencies = [
 [[package]]
 name = "etl"
 version = "0.1.0"
-source = "git+https://github.com/supabase/etl?rev=483c7cfaf2b3730413acce8e0b4ad79a8cf28bbd#483c7cfaf2b3730413acce8e0b4ad79a8cf28bbd"
+source = "git+https://github.com/psteinroe/etl?rev=63918504b7e1d76f10b11bb9e410301eb94b8ff7#63918504b7e1d76f10b11bb9e410301eb94b8ff7"
 dependencies = [
  "byteorder",
  "bytes",
@@ -540,7 +540,6 @@ dependencies = [
  "postgres-replication",
  "ring",
  "rustls",
- "rustls-pemfile",
  "serde_json",
  "sqlx",
  "tokio",
@@ -554,7 +553,7 @@ dependencies = [
 [[package]]
 name = "etl-config"
 version = "0.1.0"
-source = "git+https://github.com/supabase/etl?rev=483c7cfaf2b3730413acce8e0b4ad79a8cf28bbd#483c7cfaf2b3730413acce8e0b4ad79a8cf28bbd"
+source = "git+https://github.com/psteinroe/etl?rev=63918504b7e1d76f10b11bb9e410301eb94b8ff7#63918504b7e1d76f10b11bb9e410301eb94b8ff7"
 dependencies = [
  "config",
  "secrecy",
@@ -567,7 +566,7 @@ dependencies = [
 [[package]]
 name = "etl-postgres"
 version = "0.1.0"
-source = "git+https://github.com/supabase/etl?rev=483c7cfaf2b3730413acce8e0b4ad79a8cf28bbd#483c7cfaf2b3730413acce8e0b4ad79a8cf28bbd"
+source = "git+https://github.com/psteinroe/etl?rev=63918504b7e1d76f10b11bb9e410301eb94b8ff7#63918504b7e1d76f10b11bb9e410301eb94b8ff7"
 dependencies = [
  "bytes",
  "chrono",
@@ -2414,7 +2413,6 @@ dependencies = [
  "sha2",
  "smallvec",
  "thiserror",
- "time",
  "tokio",
  "tokio-stream",
  "tracing",
@@ -2500,7 +2498,6 @@ dependencies = [
  "sqlx-core",
  "stringprep",
  "thiserror",
- "time",
  "tracing",
  "uuid",
  "whoami",
@@ -2540,7 +2537,6 @@ dependencies = [
  "sqlx-core",
  "stringprep",
  "thiserror",
- "time",
  "tracing",
  "uuid",
  "whoami",
@@ -2567,7 +2563,6 @@ dependencies = [
  "serde_urlencoded",
  "sqlx-core",
  "thiserror",
- "time",
  "tracing",
  "url",
  "uuid",

@@ -55,5 +55,6 @@ pub async fn test_pg_config() -> PgConnectionConfig {
             trusted_root_certs: "".into(),
             enabled: false,
         },
+        keepalive: None,
     }
 }
