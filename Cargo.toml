@@ -42,8 +42,8 @@ tracing = { version = "0.1.41", default-features = false }
 tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "env-filter"] }
 x509-cert = { version = "0.2.2", default-features = false }
 
-etl          = { git = "https://github.com/psteinroe/etl", rev = "f5ceaf6c1a2a961c70250396912536fef6bb6d7d" }
-etl-postgres = { git = "https://github.com/psteinroe/etl", rev = "f5ceaf6c1a2a961c70250396912536fef6bb6d7d" }
+etl          = { git = "https://github.com/psteinroe/etl", rev = "63918504b7e1d76f10b11bb9e410301eb94b8ff7" }
+etl-postgres = { git = "https://github.com/psteinroe/etl", rev = "63918504b7e1d76f10b11bb9e410301eb94b8ff7" }
 uuid         = { version = "1.19.0", default-features = false, features = ["v4"] }
 
 [target.'cfg(not(target_env = "msvc"))'.dependencies]
