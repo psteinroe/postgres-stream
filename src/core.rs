@@ -5,8 +5,8 @@
 use crate::{
     config::{PipelineConfig, SinkConfig},
     migrations::migrate_etl,
-    recovery::{handle_slot_recovery, is_slot_invalidation_error},
     sink::memory::MemorySink,
+    slot_recovery::{handle_slot_recovery, is_slot_invalidation_error},
     stream::PgStream,
 };
 use etl::config::IntoConnectOptions;

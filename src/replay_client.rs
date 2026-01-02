@@ -36,7 +36,7 @@ where
 }
 
 #[derive(Debug, Clone)]
-pub struct FailoverClient {
+pub struct ReplayClient {
     stream_id: StreamId,
     client: Arc<Client>,
     /// Server version extracted from connection - reserved for future version-specific logic
@@ -44,12 +44,12 @@ pub struct FailoverClient {
     server_version: Option<NonZeroI32>,
 }
 
-/// Failover client uses tokio and a persistent connection to
-/// - update failover status in the pgstream.streams table
-/// - copy events stream
+/// Replay client uses tokio and a persistent connection to:
+/// - copy events from the events table via COPY stream
+/// - update replay checkpoint in the pgstream.streams table
 ///
-/// It is created when failover is initiated, and dropped when all events are replayed and the failover is complete.
-impl FailoverClient {
+/// It is created when event replay is initiated, and dropped when all events are replayed.
+impl ReplayClient {
     /// Establishes a connection to Postgres. The connection uses TLS if configured in the
     /// supplied [`PgConnectionConfig`].
     pub async fn connect(
@@ -57,8 +57,8 @@ impl FailoverClient {
         pg_connection_config: PgConnectionConfig,
     ) -> EtlResult<Self> {
         match pg_connection_config.tls.enabled {
-            true => FailoverClient::connect_tls(stream_id, pg_connection_config).await,
-            false => FailoverClient::connect_no_tls(stream_id, pg_connection_config).await,
+            true => ReplayClient::connect_tls(stream_id, pg_connection_config).await,
+            false => ReplayClient::connect_no_tls(stream_id, pg_connection_config).await,
         }
     }
 
@@ -79,7 +79,7 @@ impl FailoverClient {
 
         info!("successfully connected to postgres without tls");
 
-        Ok(FailoverClient {
+        Ok(ReplayClient {
             client: Arc::new(client),
             server_version,
             stream_id,
@@ -119,7 +119,7 @@ impl FailoverClient {
 
         info!("successfully connected to postgres with tls");
 
-        Ok(FailoverClient {
+        Ok(ReplayClient {
             client: Arc::new(client),
             server_version,
             stream_id,

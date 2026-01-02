@@ -11,8 +11,8 @@ use std::time::Duration;
 
 use etl::store::both::postgres::PostgresStore;
 use postgres_stream::migrations::migrate_etl;
-use postgres_stream::recovery::handle_slot_recovery;
 use postgres_stream::sink::memory::MemorySink;
+use postgres_stream::slot_recovery::handle_slot_recovery;
 use postgres_stream::stream::PgStream;
 use postgres_stream::test_utils::{
     TestDatabase, acquire_exclusive_test_lock, test_stream_config_with_id, unique_pipeline_id,
@@ -566,6 +566,27 @@ async fn test_pipeline_recovers_from_invalidated_slot() {
         assert!(
             replication_ready,
             "Tables should reach ready state after recovery"
+        );
+
+        // Wait for failover recovery to complete (checkpoint should be cleared)
+        let mut failover_completed = false;
+        for _ in 0..30 {
+            let stream_state: (Option<String>,) =
+                sqlx::query_as("SELECT failover_checkpoint_id FROM pgstream.streams WHERE id = $1")
+                    .bind(pipeline_id as i64)
+                    .fetch_one(&db.pool)
+                    .await
+                    .unwrap();
+
+            if stream_state.0.is_none() {
+                failover_completed = true;
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(500)).await;
+        }
+        assert!(
+            failover_completed,
+            "Failover recovery should complete and clear checkpoint"
         );
 
         // Graceful shutdown

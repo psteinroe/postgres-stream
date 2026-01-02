@@ -1,13 +1,13 @@
 pub mod concurrency;
 pub mod config;
 pub mod core;
-pub mod failover_client;
 pub mod maintenance;
 pub mod metrics;
 pub mod migrations;
 pub mod queries;
-pub mod recovery;
+pub mod replay_client;
 pub mod sink;
+pub mod slot_recovery;
 pub mod store;
 pub mod stream;
 pub mod types;
