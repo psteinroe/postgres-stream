@@ -5,7 +5,7 @@ version = "0.1.0"
 
 [features]
 default    = []
-test-utils = ["dep:testcontainers", "dep:testcontainers-modules"]
+test-utils = ["dep:ctor", "dep:testcontainers", "dep:testcontainers-modules"]
 
 [dependencies]
 anyhow = { version = "1.0.98", default-features = false, features = ["std"] }
@@ -54,8 +54,9 @@ tikv-jemallocator = { version = "0.6.1", default-features = false, features = [
 ] }
 
 
-testcontainers         = { version = "0.23", optional = true }
-testcontainers-modules = { version = "0.11", optional = true, features = ["postgres"] }
+ctor                   = { version = "0.4", optional = true }
+testcontainers         = { version = "0.23", optional = true, features = ["blocking"] }
+testcontainers-modules = { version = "0.11", optional = true, features = ["postgres", "blocking"] }
 
 [dev-dependencies]
 temp-env = "0.3"
