@@ -555,7 +555,7 @@ dependencies = [
 [[package]]
 name = "etl"
 version = "0.1.0"
-source = "git+https://github.com/psteinroe/etl?rev=63918504b7e1d76f10b11bb9e410301eb94b8ff7#63918504b7e1d76f10b11bb9e410301eb94b8ff7"
+source = "git+https://github.com/psteinroe/etl?rev=d5a8bd7624f40e58103e297553f95a3b20dd2ba7#d5a8bd7624f40e58103e297553f95a3b20dd2ba7"
 dependencies = [
  "byteorder",
  "bytes",
@@ -584,7 +584,7 @@ dependencies = [
 [[package]]
 name = "etl-config"
 version = "0.1.0"
-source = "git+https://github.com/psteinroe/etl?rev=63918504b7e1d76f10b11bb9e410301eb94b8ff7#63918504b7e1d76f10b11bb9e410301eb94b8ff7"
+source = "git+https://github.com/psteinroe/etl?rev=d5a8bd7624f40e58103e297553f95a3b20dd2ba7#d5a8bd7624f40e58103e297553f95a3b20dd2ba7"
 dependencies = [
  "config",
  "secrecy",
@@ -597,7 +597,7 @@ dependencies = [
 [[package]]
 name = "etl-postgres"
 version = "0.1.0"
-source = "git+https://github.com/psteinroe/etl?rev=63918504b7e1d76f10b11bb9e410301eb94b8ff7#63918504b7e1d76f10b11bb9e410301eb94b8ff7"
+source = "git+https://github.com/psteinroe/etl?rev=d5a8bd7624f40e58103e297553f95a3b20dd2ba7#d5a8bd7624f40e58103e297553f95a3b20dd2ba7"
 dependencies = [
  "bytes",
  "chrono",
