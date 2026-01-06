@@ -74,7 +74,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Run tests in release mode
-        run: cargo test --release --workspace
+        run: cargo test --release --all-features
 
   create_release:
     name: Create GitHub Release Draft
