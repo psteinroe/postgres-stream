@@ -1,6 +1,4 @@
-use metrics::{
-    Unit, describe_gauge, describe_histogram, gauge, histogram,
-};
+use metrics::{Unit, describe_gauge, describe_histogram, gauge, histogram};
 
 /// Metric name for tracking if a stream is currently in failover mode.
 ///
