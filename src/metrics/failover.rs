@@ -1,20 +1,12 @@
-use metrics::{
-    Unit, counter, describe_counter, describe_gauge, describe_histogram, gauge, histogram,
-};
+use metrics::{Unit, describe_gauge, describe_histogram, gauge, histogram};
 
 /// Metric name for tracking if a stream is currently in failover mode.
 ///
 /// This gauge is set to 1 when the stream is in failover mode and 0 otherwise.
 const STREAM_FAILOVER_ACTIVE: &str = "stream_failover_active";
 
-/// Metric name for counting the total number of times a stream has entered failover mode.
-const STREAM_FAILOVER_ENTERED_TOTAL: &str = "stream_failover_entered_total";
-
-/// Metric name for counting the total number of times a stream has successfully recovered from failover.
-const STREAM_FAILOVER_RECOVERED_TOTAL: &str = "stream_failover_recovered_total";
-
 /// Metric name for recording the time spent in failover mode.
-const STREAM_FAILOVER_DURATION_SECONDS: &str = "stream_failover_duration_seconds";
+const STREAM_FAILOVER_DURATION_MILLISECONDS: &str = "stream_failover_duration_milliseconds";
 
 /// Label key for stream identifier.
 const STREAM_ID_LABEL: &str = "stream_id";
@@ -26,18 +18,8 @@ pub(crate) fn register_failover_metrics() {
         Unit::Count,
         "Whether the stream is currently in failover mode (1 = failover, 0 = healthy)"
     );
-    describe_counter!(
-        STREAM_FAILOVER_ENTERED_TOTAL,
-        Unit::Count,
-        "Total number of times the stream has entered failover mode"
-    );
-    describe_counter!(
-        STREAM_FAILOVER_RECOVERED_TOTAL,
-        Unit::Count,
-        "Total number of times the stream has successfully recovered from failover"
-    );
     describe_histogram!(
-        STREAM_FAILOVER_DURATION_SECONDS,
+        STREAM_FAILOVER_DURATION_MILLISECONDS,
         Unit::Seconds,
         "Time spent in failover mode before recovery"
     );
@@ -45,11 +27,6 @@ pub(crate) fn register_failover_metrics() {
 
 /// Records that the stream has entered failover mode.
 pub fn record_failover_entered(stream_id: u64) {
-    counter!(
-        STREAM_FAILOVER_ENTERED_TOTAL,
-        STREAM_ID_LABEL => stream_id.to_string()
-    )
-    .increment(1);
     gauge!(
         STREAM_FAILOVER_ACTIVE,
         STREAM_ID_LABEL => stream_id.to_string()
@@ -58,20 +35,15 @@ pub fn record_failover_entered(stream_id: u64) {
 }
 
 /// Records that the stream has recovered from failover mode.
-pub fn record_failover_recovered(stream_id: u64, duration_seconds: f64) {
-    counter!(
-        STREAM_FAILOVER_RECOVERED_TOTAL,
-        STREAM_ID_LABEL => stream_id.to_string()
-    )
-    .increment(1);
+pub fn record_failover_recovered(stream_id: u64, duration_milliseconds: f64) {
     gauge!(
         STREAM_FAILOVER_ACTIVE,
         STREAM_ID_LABEL => stream_id.to_string()
     )
     .set(0.0);
     histogram!(
-        STREAM_FAILOVER_DURATION_SECONDS,
+        STREAM_FAILOVER_DURATION_MILLISECONDS,
         STREAM_ID_LABEL => stream_id.to_string()
     )
-    .record(duration_seconds);
+    .record(duration_milliseconds);
 }

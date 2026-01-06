@@ -223,8 +223,9 @@ where
         }
 
         // Record successful failover recovery
-        let failover_duration_seconds = (Utc::now() - failover_start).num_seconds() as f64;
-        metrics::record_failover_recovered(self.config.id, failover_duration_seconds);
+        let failover_duration_milliseconds =
+            (Utc::now() - failover_start).num_milliseconds() as f64;
+        metrics::record_failover_recovered(self.config.id, failover_duration_milliseconds);
 
         self.store
             .store_stream_status(StreamStatus::Healthy)
