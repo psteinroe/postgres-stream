@@ -1,27 +1,26 @@
 //! Elasticsearch sink for indexing events as documents.
 //!
-//! Indexes each event as a JSON document in the configured Elasticsearch index.
+//! Indexes each event's payload as a JSON document in Elasticsearch.
 //! The sink uses bulk indexing for efficient batch operations.
 //!
-//! # Payload Extensions
+//! # Dynamic Routing
 //!
-//! This sink supports the following optional payload extensions:
+//! The target index can come from event metadata or sink config:
 //!
 //! ```sql
-//! payload_extensions = '[
-//!   {"key": "routing", "value": "user_123"},
-//!   {"key": "pipeline", "value": "my-pipeline"}
-//! ]'
+//! -- Via metadata_extensions (dynamic per-event)
+//! metadata_extensions = '[{"key": "index", "source": "record", "value": "index_name"}]'
+//!
+//! -- Via static metadata
+//! metadata = '{"index": "events"}'
 //! ```
 //!
-//! - `routing`: Document routing value for shard placement.
-//! - `pipeline`: Ingest pipeline to process the document.
+//! Priority: event.metadata["index"] > config.index
 
 use elasticsearch::http::transport::Transport;
 use elasticsearch::{BulkOperation, BulkParts, Elasticsearch};
 use etl::error::EtlResult;
 use serde::{Deserialize, Serialize};
-use tracing::info;
 
 use crate::sink::Sink;
 use crate::types::TriggeredEvent;
@@ -36,7 +35,9 @@ pub struct ElasticsearchSinkConfig {
     pub url: String,
 
     /// Index name for document storage.
-    pub index: String,
+    /// Can be overridden per-event via metadata["index"].
+    #[serde(default)]
+    pub index: Option<String>,
 }
 
 /// Configuration for the Elasticsearch sink without sensitive data.
@@ -48,7 +49,7 @@ pub struct ElasticsearchSinkConfigWithoutSecrets {
     pub url_host: String,
 
     /// Index name for document storage.
-    pub index: String,
+    pub index: Option<String>,
 }
 
 impl From<ElasticsearchSinkConfig> for ElasticsearchSinkConfigWithoutSecrets {
@@ -91,8 +92,8 @@ pub struct ElasticsearchSink {
     /// Elasticsearch client.
     client: Elasticsearch,
 
-    /// Target index name.
-    index: String,
+    /// Default index name from config (can be overridden per-event).
+    index: Option<String>,
 }
 
 impl ElasticsearchSink {
@@ -112,6 +113,20 @@ impl ElasticsearchSink {
             index: config.index,
         })
     }
+
+    /// Resolves the index name for an event.
+    ///
+    /// Priority: event.metadata["index"] > config.index
+    fn resolve_index<'a>(&'a self, event: &'a TriggeredEvent) -> Option<&'a str> {
+        // Check event metadata first.
+        if let Some(ref metadata) = event.metadata {
+            if let Some(index) = metadata.get("index").and_then(|v| v.as_str()) {
+                return Some(index);
+            }
+        }
+        // Fall back to config.
+        self.index.as_deref()
+    }
 }
 
 impl Sink for ElasticsearchSink {
@@ -124,43 +139,36 @@ impl Sink for ElasticsearchSink {
             return Ok(());
         }
 
-        info!("indexing {} events to Elasticsearch", events.len());
-
         // Build bulk operations.
         let mut operations: Vec<BulkOperation<serde_json::Value>> = Vec::with_capacity(events.len());
 
         for event in &events {
-            // Build JSON document.
-            let mut doc = serde_json::json!({
-                "id": event.id.id,
-                "created_at": event.id.created_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
-                "payload": event.payload,
-                "stream_id": format!("{:?}", event.stream_id),
-            });
+            // Resolve target index for this event.
+            let index = self.resolve_index(event).ok_or_else(|| {
+                etl::etl_error!(
+                    etl::error::ErrorKind::ConfigError,
+                    "No index in config or event metadata"
+                )
+            })?;
 
-            // Add optional fields.
-            if let Some(ref metadata) = event.metadata {
-                doc["metadata"] = metadata.clone();
-            }
-            if let Some(lsn) = event.lsn {
-                doc["lsn"] = serde_json::json!(lsn.to_string());
-            }
-
-            // Use event ID as document ID.
-            let op = BulkOperation::index(doc).id(&event.id.id).into();
+            // Index only the payload (not full event envelope).
+            let op = BulkOperation::index(event.payload.clone())
+                .id(&event.id.id)
+                .index(index)
+                .into();
             operations.push(op);
         }
 
-        // Execute bulk request.
+        // Execute bulk request (no default index needed since each op has its own).
         let response = self
             .client
-            .bulk(BulkParts::Index(&self.index))
+            .bulk(BulkParts::None)
             .body(operations)
             .send()
             .await
             .map_err(|e| {
                 etl::etl_error!(
-                    etl::error::ErrorKind::InvalidData,
+                    etl::error::ErrorKind::DestinationError,
                     "Failed to execute bulk request",
                     e.to_string()
                 )
@@ -170,7 +178,7 @@ impl Sink for ElasticsearchSink {
         if !response.status_code().is_success() {
             let status = response.status_code();
             return Err(etl::etl_error!(
-                etl::error::ErrorKind::InvalidData,
+                etl::error::ErrorKind::DestinationError,
                 "Elasticsearch bulk request failed",
                 format!("status: {}", status)
             ));
@@ -179,19 +187,19 @@ impl Sink for ElasticsearchSink {
         // Check for item-level errors.
         let body = response.json::<serde_json::Value>().await.map_err(|e| {
             etl::etl_error!(
-                etl::error::ErrorKind::InvalidData,
+                etl::error::ErrorKind::DestinationError,
                 "Failed to parse bulk response",
                 e.to_string()
             )
         })?;
 
         if body["errors"].as_bool().unwrap_or(false) {
-            // Log first error for debugging.
+            // Return first error for debugging.
             if let Some(items) = body["items"].as_array() {
                 for item in items {
                     if let Some(error) = item["index"]["error"].as_object() {
                         return Err(etl::etl_error!(
-                            etl::error::ErrorKind::InvalidData,
+                            etl::error::ErrorKind::DestinationError,
                             "Elasticsearch indexing error",
                             format!("{:?}", error)
                         ));
@@ -217,14 +225,14 @@ mod tests {
     fn test_config_without_secrets() {
         let config = ElasticsearchSinkConfig {
             url: "http://user:pass@localhost:9200".to_string(),
-            index: "events".to_string(),
+            index: Some("events".to_string()),
         };
 
         let without_secrets: ElasticsearchSinkConfigWithoutSecrets = (&config).into();
 
         // Should extract only host:port, no credentials.
         assert_eq!(without_secrets.url_host, "localhost:9200");
-        assert_eq!(without_secrets.index, "events");
+        assert_eq!(without_secrets.index, Some("events".to_string()));
     }
 
     #[test]

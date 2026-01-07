@@ -40,7 +40,7 @@ async fn test_elasticsearch_sink_indexes_events() {
     // Create sink.
     let config = ElasticsearchSinkConfig {
         url: format!("http://127.0.0.1:{}", port),
-        index: index_name.clone(),
+        index: Some(index_name.clone()),
     };
 
     let sink = ElasticsearchSink::new(config).await.expect("Failed to create sink");
@@ -97,7 +97,7 @@ async fn test_elasticsearch_sink_handles_empty_batch() {
 
     let config = ElasticsearchSinkConfig {
         url: format!("http://127.0.0.1:{}", port),
-        index: index_name,
+        index: Some(index_name),
     };
 
     let sink = ElasticsearchSink::new(config).await.expect("Failed to create sink");
@@ -109,13 +109,13 @@ async fn test_elasticsearch_sink_handles_empty_batch() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn test_elasticsearch_sink_includes_metadata() {
+async fn test_elasticsearch_sink_indexes_only_payload() {
     let port = ensure_elasticsearch().await;
     let index_name = format!("test-index-{}", Uuid::new_v4());
 
     let config = ElasticsearchSinkConfig {
         url: format!("http://127.0.0.1:{}", port),
-        index: index_name.clone(),
+        index: Some(index_name.clone()),
     };
 
     let sink = ElasticsearchSink::new(config).await.expect("Failed to create sink");
@@ -124,8 +124,8 @@ async fn test_elasticsearch_sink_includes_metadata() {
     let event = TriggeredEvent {
         id: EventIdentifier::new(Uuid::new_v4().to_string(), Utc::now()),
         stream_id: StreamId::default(),
-        payload: serde_json::json!({ "action": "created" }),
-        metadata: Some(serde_json::json!({ "user_id": 123, "source": "api" })),
+        payload: serde_json::json!({ "action": "created", "user_id": 456 }),
+        metadata: Some(serde_json::json!({ "source": "api" })),
         lsn: Some(PgLsn::from(99999u64)),
     };
     let event_id = event.id.id.clone();
@@ -155,9 +155,15 @@ async fn test_elasticsearch_sink_includes_metadata() {
         .expect("Failed to parse response");
 
     let source = &body["_source"];
-    assert_eq!(source["metadata"]["user_id"], 123);
-    assert_eq!(source["metadata"]["source"], "api");
-    assert!(source["lsn"].is_string());
+    // Only payload fields should be present.
+    assert_eq!(source["action"], "created");
+    assert_eq!(source["user_id"], 456);
+    // No envelope fields.
+    assert!(source.get("id").is_none());
+    assert!(source.get("created_at").is_none());
+    assert!(source.get("metadata").is_none());
+    assert!(source.get("lsn").is_none());
+    assert!(source.get("stream_id").is_none());
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -167,7 +173,7 @@ async fn test_elasticsearch_sink_searchable() {
 
     let config = ElasticsearchSinkConfig {
         url: format!("http://127.0.0.1:{}", port),
-        index: index_name.clone(),
+        index: Some(index_name.clone()),
     };
 
     let sink = ElasticsearchSink::new(config).await.expect("Failed to create sink");
@@ -209,6 +215,61 @@ async fn test_elasticsearch_sink_searchable() {
         .as_i64()
         .expect("Missing hit count");
     assert_eq!(hits, 3, "Expected 3 documents");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_elasticsearch_sink_uses_index_from_metadata() {
+    let port = ensure_elasticsearch().await;
+    let metadata_index = format!("metadata-index-{}", Uuid::new_v4());
+
+    // Create sink with NO default index.
+    let config = ElasticsearchSinkConfig {
+        url: format!("http://127.0.0.1:{}", port),
+        index: None,
+    };
+
+    let sink = ElasticsearchSink::new(config).await.expect("Failed to create sink");
+
+    // Create event with index in metadata.
+    let event = TriggeredEvent {
+        id: EventIdentifier::new(Uuid::new_v4().to_string(), Utc::now()),
+        stream_id: StreamId::default(),
+        payload: serde_json::json!({ "routed": true }),
+        metadata: Some(serde_json::json!({ "index": metadata_index })),
+        lsn: None,
+    };
+    let event_id = event.id.id.clone();
+
+    sink.publish_events(vec![event])
+        .await
+        .expect("Failed to publish");
+
+    // Verify document was indexed to metadata-specified index.
+    let client = create_test_client(port).await;
+    client
+        .indices()
+        .refresh(IndicesRefreshParts::Index(&[&metadata_index]))
+        .send()
+        .await
+        .expect("Failed to refresh");
+
+    let response = client
+        .get(GetParts::IndexId(&metadata_index, &event_id))
+        .send()
+        .await
+        .expect("Failed to get document");
+
+    assert!(
+        response.status_code().is_success(),
+        "Document not found in metadata-specified index"
+    );
+
+    let body = response
+        .json::<serde_json::Value>()
+        .await
+        .expect("Failed to parse response");
+
+    assert_eq!(body["_source"]["routed"], true);
 }
 
 #[test]
