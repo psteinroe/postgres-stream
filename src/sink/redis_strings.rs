@@ -2,10 +2,21 @@
 //!
 //! Stores each event as a Redis string with the event ID as key and
 //! the JSON-serialized payload as value.
+//!
+//! # Payload Extensions
+//!
+//! This sink does not require any specific payload extensions. However, you can
+//! use payload extensions to customize the key structure:
+//!
+//! ```sql
+//! payload_extensions = '[
+//!   {"key": "custom_key", "value": "my-custom-key-123"}
+//! ]'
+//! ```
 
 use etl::error::EtlResult;
 use redis::aio::ConnectionManager;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tracing::info;
@@ -14,14 +25,43 @@ use crate::sink::Sink;
 use crate::types::TriggeredEvent;
 
 /// Configuration for the Redis Strings sink.
+///
+/// This intentionally does not implement [`Serialize`] to avoid accidentally
+/// leaking secrets (URL credentials) in serialized forms.
 #[derive(Clone, Debug, Deserialize)]
 pub struct RedisStringsSinkConfig {
     /// Redis connection URL (e.g., "redis://localhost:6379").
+    /// Contains credentials and should be treated as sensitive.
     pub url: String,
 
     /// Optional prefix for all keys.
     #[serde(default)]
     pub key_prefix: Option<String>,
+}
+
+/// Configuration for the Redis Strings sink without sensitive data.
+///
+/// Safe to serialize and log. Use this for debugging and metrics.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct RedisStringsSinkConfigWithoutSecrets {
+    /// Optional prefix for all keys.
+    pub key_prefix: Option<String>,
+}
+
+impl From<RedisStringsSinkConfig> for RedisStringsSinkConfigWithoutSecrets {
+    fn from(config: RedisStringsSinkConfig) -> Self {
+        Self {
+            key_prefix: config.key_prefix,
+        }
+    }
+}
+
+impl From<&RedisStringsSinkConfig> for RedisStringsSinkConfigWithoutSecrets {
+    fn from(config: &RedisStringsSinkConfig) -> Self {
+        Self {
+            key_prefix: config.key_prefix.clone(),
+        }
+    }
 }
 
 /// Sink that stores events as Redis string key-value pairs.
