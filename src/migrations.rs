@@ -1,4 +1,4 @@
-use etl::config::{IntoConnectOptions, PgConnectionConfig};
+use etl::config::{ETL_MIGRATION_OPTIONS, IntoConnectOptions, PgConnectionConfig};
 use sqlx::{
     Executor,
     postgres::{PgConnectOptions, PgPoolOptions},
@@ -14,7 +14,7 @@ const NUM_POOL_CONNECTIONS: u32 = 1;
 /// and applies all pending migrations. The migrations are run in the `etl` schema
 /// to avoid cluttering the public schema with migration metadata tables created by `sqlx`.
 pub async fn migrate_etl(connection_config: &PgConnectionConfig) -> Result<(), sqlx::Error> {
-    let options: PgConnectOptions = connection_config.with_db();
+    let options: PgConnectOptions = connection_config.with_db(Some(&ETL_MIGRATION_OPTIONS));
 
     let pool = PgPoolOptions::new()
         .max_connections(NUM_POOL_CONNECTIONS)
@@ -50,7 +50,7 @@ pub async fn migrate_etl(connection_config: &PgConnectionConfig) -> Result<(), s
 /// and applies all pending migrations. The migrations are run in the `pgstream` schema
 /// to avoid cluttering the public schema with migration metadata tables created by `sqlx`.
 pub async fn migrate_pgstream(connection_config: &PgConnectionConfig) -> Result<(), sqlx::Error> {
-    let options: PgConnectOptions = connection_config.with_db();
+    let options: PgConnectOptions = connection_config.with_db(Some(&ETL_MIGRATION_OPTIONS));
 
     let pool = PgPoolOptions::new()
         .max_connections(NUM_POOL_CONNECTIONS)
