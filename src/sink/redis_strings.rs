@@ -1,16 +1,16 @@
 //! Redis Strings sink for publishing events as key-value pairs.
 //!
-//! Stores each event as a Redis string with the event ID as key and
-//! the JSON-serialized payload as value.
+//! Stores each event's payload as a Redis string. The key is determined by:
+//! 1. `key` in event metadata (from subscription's metadata/metadata_extensions)
+//! 2. Fallback to event ID (optionally with key_prefix from config)
 //!
-//! # Payload Extensions
+//! # Dynamic Routing
 //!
-//! This sink does not require any specific payload extensions. However, you can
-//! use payload extensions to customize the key structure:
+//! The Redis key can be configured per-event using metadata_extensions:
 //!
 //! ```sql
-//! payload_extensions = '[
-//!   {"key": "custom_key", "value": "my-custom-key-123"}
+//! metadata_extensions = '[
+//!   {"json_path": "key", "expression": "''user:'' || (payload->''user_id'')::text"}
 //! ]'
 //! ```
 
@@ -19,7 +19,6 @@ use redis::aio::ConnectionManager;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use tracing::info;
 
 use crate::sink::Sink;
 use crate::types::TriggeredEvent;
@@ -66,7 +65,7 @@ impl From<&RedisStringsSinkConfig> for RedisStringsSinkConfigWithoutSecrets {
 
 /// Sink that stores events as Redis string key-value pairs.
 ///
-/// Each event is stored with its ID as the key and JSON payload as the value.
+/// Each event's payload is stored with a dynamic or default key.
 /// The sink uses a connection manager for automatic reconnection handling.
 #[derive(Clone)]
 pub struct RedisStringsSink {
@@ -95,11 +94,18 @@ impl RedisStringsSink {
         })
     }
 
-    /// Formats the Redis key for an event.
-    fn format_key(&self, event_id: &str) -> String {
+    /// Resolves the Redis key for an event from metadata or default (event ID).
+    fn resolve_key(&self, event: &TriggeredEvent) -> String {
+        // First check event metadata for dynamic key.
+        if let Some(ref metadata) = event.metadata {
+            if let Some(key) = metadata.get("key").and_then(|v| v.as_str()) {
+                return key.to_string();
+            }
+        }
+        // Fall back to event ID with optional prefix.
         match &self.key_prefix {
-            Some(prefix) => format!("{}:{}", prefix, event_id),
-            None => event_id.to_string(),
+            Some(prefix) => format!("{}:{}", prefix, event.id.id),
+            None => event.id.id.clone(),
         }
     }
 }
@@ -114,19 +120,17 @@ impl Sink for RedisStringsSink {
             return Ok(());
         }
 
-        info!("publishing {} events to Redis", events.len());
-
         let mut conn = self.connection.lock().await;
 
         // Use pipeline for batch efficiency.
         let mut pipe = redis::pipe();
 
         for event in &events {
-            let key = self.format_key(&event.id.id);
+            let key = self.resolve_key(event);
             let value = serde_json::to_string(&event.payload).map_err(|e| {
                 etl::etl_error!(
                     etl::error::ErrorKind::InvalidData,
-                    "Failed to serialize event payload",
+                    "Failed to serialize payload to JSON",
                     e.to_string()
                 )
             })?;
@@ -136,7 +140,7 @@ impl Sink for RedisStringsSink {
 
         pipe.query_async::<()>(&mut *conn).await.map_err(|e| {
             etl::etl_error!(
-                etl::error::ErrorKind::InvalidData,
+                etl::error::ErrorKind::DestinationError,
                 "Failed to publish events to Redis",
                 e.to_string()
             )
@@ -153,32 +157,5 @@ mod tests {
     #[test]
     fn test_sink_name() {
         assert_eq!(RedisStringsSink::name(), "redis-strings");
-    }
-
-    #[test]
-    fn test_format_key_without_prefix() {
-        // Cannot construct sink without connection, test logic directly.
-        let event_id = "test-event-123";
-        let key_prefix: Option<String> = None;
-
-        let result = match &key_prefix {
-            Some(prefix) => format!("{}:{}", prefix, event_id),
-            None => event_id.to_string(),
-        };
-
-        assert_eq!(result, "test-event-123");
-    }
-
-    #[test]
-    fn test_format_key_with_prefix() {
-        let event_id = "test-event-123";
-        let key_prefix = Some("pgstream".to_string());
-
-        let result = match &key_prefix {
-            Some(prefix) => format!("{}:{}", prefix, event_id),
-            None => event_id.to_string(),
-        };
-
-        assert_eq!(result, "pgstream:test-event-123");
     }
 }

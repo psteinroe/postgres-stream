@@ -124,6 +124,53 @@ async fn test_redis_strings_sink_empty_batch() {
         .expect("Empty batch should succeed");
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn test_redis_strings_sink_uses_key_from_metadata() {
+    let redis_port = ensure_redis().await;
+    let redis_url = format!("redis://127.0.0.1:{}", redis_port);
+
+    let config = RedisStringsSinkConfig {
+        url: redis_url.clone(),
+        key_prefix: None,
+    };
+
+    let sink = RedisStringsSink::new(config)
+        .await
+        .expect("Failed to create Redis Strings sink");
+
+    // Create event with custom key in metadata.
+    let custom_key = "user:12345:profile";
+    let event = TriggeredEvent {
+        id: EventIdentifier::new("event-with-metadata-key".to_string(), Utc::now()),
+        payload: serde_json::json!({
+            "test_id": "metadata-key-event",
+            "message": "Test event with metadata key",
+        }),
+        metadata: Some(serde_json::json!({ "key": custom_key })),
+        stream_id: StreamId::from(1u64),
+        lsn: Some("0/16B3748".parse().unwrap()),
+    };
+
+    sink.publish_events(vec![event])
+        .await
+        .expect("Failed to publish events");
+
+    // Verify event is stored with metadata key, not event ID.
+    let client = redis::Client::open(redis_url).expect("Failed to open redis client");
+    let mut conn = client
+        .get_multiplexed_async_connection()
+        .await
+        .expect("Failed to get connection");
+
+    let value: String = conn
+        .get(custom_key)
+        .await
+        .expect("Failed to get event from Redis");
+
+    let parsed: serde_json::Value = serde_json::from_str(&value).expect("Failed to parse JSON");
+    assert_eq!(parsed["test_id"], "metadata-key-event");
+}
+
 #[test]
 fn test_sink_name() {
     assert_eq!(RedisStringsSink::name(), "redis-strings");
