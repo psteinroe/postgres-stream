@@ -1,3 +1,4 @@
+use chrono::Duration;
 use etl::destination::Destination;
 use etl::store::both::postgres::PostgresStore;
 use postgres_stream::sink::memory::MemorySink;
@@ -510,5 +511,66 @@ async fn test_failover_checkpoint_persists_across_stream_instances() {
     assert!(
         matches!(status, StreamStatus::Healthy),
         "Stream should be Healthy after recovery"
+    );
+}
+
+// Shutdown tests
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_shutdown_succeeds_and_preserves_maintenance_schedule() {
+    let db = TestDatabase::spawn().await;
+    let config = test_stream_config(&db);
+    let sink = MemorySink::new();
+    let store = create_postgres_store(config.id, &db.config, &db.pool).await;
+
+    // First create a stream to initialize the schema
+    let stream1: PgStream<MemorySink, PostgresStore> =
+        PgStream::create(config.clone(), sink.clone(), store.clone())
+            .await
+            .unwrap();
+
+    // Set next_maintenance_at to 1 hour in the past
+    let helper_store = StreamStore::create(test_stream_config(&db), store.clone())
+        .await
+        .unwrap();
+    let past_maintenance_time = chrono::Utc::now() - Duration::hours(1);
+    helper_store
+        .store_next_maintenance_at(past_maintenance_time)
+        .await
+        .unwrap();
+
+    // Drop and recreate stream - this reads the past time from DB and runs maintenance
+    drop(stream1);
+    let stream2: PgStream<MemorySink, PostgresStore> =
+        PgStream::create(config.clone(), MemorySink::new(), store.clone())
+            .await
+            .unwrap();
+
+    // Verify maintenance ran and scheduled next run 24h from the past scheduled time
+    let helper_store2 = StreamStore::create(test_stream_config(&db), store.clone())
+        .await
+        .unwrap();
+    let (_, next_maintenance) = helper_store2.get_stream_state().await.unwrap();
+    let expected_next = past_maintenance_time + Duration::hours(24);
+
+    assert_eq!(
+        next_maintenance.timestamp(),
+        expected_next.timestamp(),
+        "Next maintenance should be scheduled 24h after the original scheduled time"
+    );
+
+    // Shutdown should complete successfully
+    stream2.shutdown().await.unwrap();
+
+    // Schedule should be preserved after shutdown
+    let helper_store3 = StreamStore::create(test_stream_config(&db), store.clone())
+        .await
+        .unwrap();
+    let (_, next_after_shutdown) = helper_store3.get_stream_state().await.unwrap();
+
+    assert_eq!(
+        next_after_shutdown.timestamp(),
+        expected_next.timestamp(),
+        "Next maintenance schedule should be preserved after shutdown"
     );
 }
