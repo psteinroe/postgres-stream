@@ -37,7 +37,7 @@ async fn test_meilisearch_sink_indexes_events() {
     // Create sink.
     let config = MeilisearchSinkConfig {
         url: format!("http://127.0.0.1:{}", port),
-        index: index_name.clone(),
+        index: Some(index_name.clone()),
         api_key: None,
     };
 
@@ -77,7 +77,7 @@ async fn test_meilisearch_sink_handles_empty_batch() {
 
     let config = MeilisearchSinkConfig {
         url: format!("http://127.0.0.1:{}", port),
-        index: index_name,
+        index: Some(index_name),
         api_key: None,
     };
 
@@ -90,13 +90,13 @@ async fn test_meilisearch_sink_handles_empty_batch() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn test_meilisearch_sink_includes_metadata() {
+async fn test_meilisearch_sink_indexes_only_payload() {
     let port = ensure_meilisearch().await;
     let index_name = format!("test-index-{}", Uuid::new_v4());
 
     let config = MeilisearchSinkConfig {
         url: format!("http://127.0.0.1:{}", port),
-        index: index_name.clone(),
+        index: Some(index_name.clone()),
         api_key: None,
     };
 
@@ -106,8 +106,8 @@ async fn test_meilisearch_sink_includes_metadata() {
     let event = TriggeredEvent {
         id: EventIdentifier::new(Uuid::new_v4().to_string(), Utc::now()),
         stream_id: StreamId::default(),
-        payload: serde_json::json!({ "action": "created" }),
-        metadata: Some(serde_json::json!({ "user_id": 123, "source": "api" })),
+        payload: serde_json::json!({ "action": "created", "user_id": 456 }),
+        metadata: Some(serde_json::json!({ "source": "api" })),
         lsn: Some(PgLsn::from(99999u64)),
     };
     let event_id = event.id.id.clone();
@@ -125,9 +125,15 @@ async fn test_meilisearch_sink_includes_metadata() {
         .await
         .expect("Failed to get document");
 
-    assert_eq!(doc["metadata"]["user_id"], 123);
-    assert_eq!(doc["metadata"]["source"], "api");
-    assert!(doc["lsn"].is_string());
+    // Only payload fields + injected id should be present.
+    assert_eq!(doc["action"], "created");
+    assert_eq!(doc["user_id"], 456);
+    assert_eq!(doc["id"], event_id); // Injected for primary key.
+    // No envelope fields.
+    assert!(doc.get("created_at").is_none());
+    assert!(doc.get("metadata").is_none());
+    assert!(doc.get("lsn").is_none());
+    assert!(doc.get("stream_id").is_none());
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -137,7 +143,7 @@ async fn test_meilisearch_sink_searchable() {
 
     let config = MeilisearchSinkConfig {
         url: format!("http://127.0.0.1:{}", port),
-        index: index_name.clone(),
+        index: Some(index_name.clone()),
         api_key: None,
     };
 
@@ -171,6 +177,47 @@ async fn test_meilisearch_sink_searchable() {
         "Expected 3 documents, got {}",
         results.hits.len()
     );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_meilisearch_sink_uses_index_from_metadata() {
+    let port = ensure_meilisearch().await;
+    let metadata_index = format!("metadata-index-{}", Uuid::new_v4());
+
+    // Create sink with NO default index.
+    let config = MeilisearchSinkConfig {
+        url: format!("http://127.0.0.1:{}", port),
+        index: None,
+        api_key: None,
+    };
+
+    let sink = MeilisearchSink::new(config).await.expect("Failed to create sink");
+
+    // Create event with index in metadata.
+    let event = TriggeredEvent {
+        id: EventIdentifier::new(Uuid::new_v4().to_string(), Utc::now()),
+        stream_id: StreamId::default(),
+        payload: serde_json::json!({ "routed": true }),
+        metadata: Some(serde_json::json!({ "index": metadata_index })),
+        lsn: None,
+    };
+    let event_id = event.id.id.clone();
+
+    sink.publish_events(vec![event])
+        .await
+        .expect("Failed to publish");
+
+    // Verify document was indexed to metadata-specified index.
+    let client = create_test_client(port);
+    let index = client.index(&metadata_index);
+
+    let doc: serde_json::Value = index
+        .get_document(&event_id)
+        .await
+        .expect("Failed to get document from metadata-specified index");
+
+    assert_eq!(doc["routed"], true);
+    assert_eq!(doc["id"], event_id);
 }
 
 #[test]
