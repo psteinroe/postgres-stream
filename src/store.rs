@@ -1,6 +1,6 @@
 use chrono::{DateTime, Utc};
 use etl::{
-    config::{IntoConnectOptions, PgConnectionConfig},
+    config::{ETL_STATE_MANAGEMENT_OPTIONS, IntoConnectOptions, PgConnectionConfig},
     error::{ErrorKind, EtlResult},
     etl_error,
     store::schema::SchemaStore,
@@ -109,7 +109,7 @@ impl<S: SchemaStore> StreamStore<S> {
 
     /// Acquires a temporary connection that will be closed when dropped.
     async fn connect_temporary(source_config: &PgConnectionConfig) -> EtlResult<PgPool> {
-        let options = source_config.with_db();
+        let options = source_config.with_db(Some(&ETL_STATE_MANAGEMENT_OPTIONS));
 
         let pool = PgPoolOptions::new()
             .min_connections(NUM_POOL_CONNECTIONS)

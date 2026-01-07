@@ -95,7 +95,7 @@ impl Drop for TestDatabase {
 /// Creates a new Postgres database and returns a connection pool.
 async fn create_pg_database(config: &PgConnectionConfig) -> PgPool {
     // Create the database via a single connection (connect without specifying DB).
-    let mut connection = PgConnection::connect_with(&config.without_db())
+    let mut connection = PgConnection::connect_with(&config.without_db(None))
         .await
         .expect("Failed to connect to Postgres (admin)");
 
@@ -107,7 +107,7 @@ async fn create_pg_database(config: &PgConnectionConfig) -> PgPool {
     // Create a connection pool to the new database.
     PgPoolOptions::new()
         .max_connections(5)
-        .connect_with(config.with_db())
+        .connect_with(config.with_db(None))
         .await
         .expect("Failed to connect to test database")
 }
@@ -117,7 +117,7 @@ async fn create_pg_database(config: &PgConnectionConfig) -> PgPool {
 /// Errors are logged but do not panic.
 async fn drop_pg_database(config: &PgConnectionConfig) {
     // Connect to the default database.
-    let mut connection = match PgConnection::connect_with(&config.without_db()).await {
+    let mut connection = match PgConnection::connect_with(&config.without_db(None)).await {
         Ok(conn) => conn,
         Err(e) => {
             eprintln!("[test] warning: failed to connect to Postgres for cleanup: {e}");

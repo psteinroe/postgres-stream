@@ -2,7 +2,7 @@ use std::io::BufReader;
 use std::num::NonZeroI32;
 use std::sync::Arc;
 
-use etl::config::{IntoConnectOptions, PgConnectionConfig};
+use etl::config::{ETL_REPLICATION_OPTIONS, IntoConnectOptions, PgConnectionConfig};
 use etl::error::EtlResult;
 use etl_postgres::replication::extract_server_version;
 use tokio_postgres::tls::MakeTlsConnect;
@@ -67,7 +67,9 @@ impl ReplayClient {
         stream_id: StreamId,
         pg_connection_config: PgConnectionConfig,
     ) -> EtlResult<Self> {
-        let config: Config = pg_connection_config.clone().with_db();
+        let config: Config = pg_connection_config
+            .clone()
+            .with_db(Some(&ETL_REPLICATION_OPTIONS));
 
         let (client, connection) = config.connect(NoTls).await?;
 
@@ -93,7 +95,9 @@ impl ReplayClient {
         stream_id: StreamId,
         pg_connection_config: PgConnectionConfig,
     ) -> EtlResult<Self> {
-        let config: Config = pg_connection_config.clone().with_db();
+        let config: Config = pg_connection_config
+            .clone()
+            .with_db(Some(&ETL_REPLICATION_OPTIONS));
 
         let mut root_store = rustls::RootCertStore::empty();
         if pg_connection_config.tls.enabled {

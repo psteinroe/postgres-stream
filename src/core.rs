@@ -9,7 +9,7 @@ use crate::{
     slot_recovery::{handle_slot_recovery, is_slot_invalidation_error},
     stream::PgStream,
 };
-use etl::config::IntoConnectOptions;
+use etl::config::{ETL_REPLICATION_OPTIONS, IntoConnectOptions};
 use etl::error::EtlResult;
 use etl::pipeline::Pipeline;
 use etl::store::both::postgres::PostgresStore;
@@ -47,7 +47,13 @@ pub async fn start_pipeline_with_config(config: PipelineConfig) -> EtlResult<()>
 
                 let pool = PgPoolOptions::new()
                     .max_connections(1)
-                    .connect_with(config.stream.pg_connection.with_db())
+                    .connect_with(
+                        config
+                            .stream
+                            .pg_connection
+                            // we use replication options without timeouts because the events query can take a while
+                            .with_db(Some(&ETL_REPLICATION_OPTIONS)),
+                    )
                     .await?;
 
                 if let Err(recovery_err) = handle_slot_recovery(&pool, config.stream.id).await {

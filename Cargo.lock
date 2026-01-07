@@ -555,8 +555,9 @@ dependencies = [
 [[package]]
 name = "etl"
 version = "0.1.0"
-source = "git+https://github.com/psteinroe/etl?rev=d5a8bd7624f40e58103e297553f95a3b20dd2ba7#d5a8bd7624f40e58103e297553f95a3b20dd2ba7"
+source = "git+https://github.com/supabase/etl?rev=dd2987a55efc16aeb4402e4b06853c7731a6155a#dd2987a55efc16aeb4402e4b06853c7731a6155a"
 dependencies = [
+ "aws-lc-rs",
  "byteorder",
  "bytes",
  "chrono",
@@ -569,7 +570,6 @@ dependencies = [
  "pg_escape",
  "pin-project-lite",
  "postgres-replication",
- "ring",
  "rustls",
  "serde_json",
  "sqlx",
@@ -584,7 +584,7 @@ dependencies = [
 [[package]]
 name = "etl-config"
 version = "0.1.0"
-source = "git+https://github.com/psteinroe/etl?rev=d5a8bd7624f40e58103e297553f95a3b20dd2ba7#d5a8bd7624f40e58103e297553f95a3b20dd2ba7"
+source = "git+https://github.com/supabase/etl?rev=dd2987a55efc16aeb4402e4b06853c7731a6155a#dd2987a55efc16aeb4402e4b06853c7731a6155a"
 dependencies = [
  "config",
  "secrecy",
@@ -597,7 +597,7 @@ dependencies = [
 [[package]]
 name = "etl-postgres"
 version = "0.1.0"
-source = "git+https://github.com/psteinroe/etl?rev=d5a8bd7624f40e58103e297553f95a3b20dd2ba7#d5a8bd7624f40e58103e297553f95a3b20dd2ba7"
+source = "git+https://github.com/supabase/etl?rev=dd2987a55efc16aeb4402e4b06853c7731a6155a#dd2987a55efc16aeb4402e4b06853c7731a6155a"
 dependencies = [
  "bytes",
  "chrono",
