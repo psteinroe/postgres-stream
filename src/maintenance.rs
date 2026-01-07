@@ -113,7 +113,10 @@ impl RetentionPolicy {
 ///
 /// - Drops partitions older than retention period
 /// - Creates partitions for upcoming days
-pub async fn run_maintenance<S: SchemaStore>(store: &StreamStore<S>) -> EtlResult<DateTime<Utc>> {
+pub async fn run_maintenance<S: SchemaStore>(
+    store: &StreamStore<S>,
+    scheduled_time: DateTime<Utc>,
+) -> EtlResult<DateTime<Utc>> {
     let start = Utc::now();
     let stream_id = store.stream_id();
 
@@ -140,16 +143,16 @@ pub async fn run_maintenance<S: SchemaStore>(store: &StreamStore<S>) -> EtlResul
                 .await?;
         }
 
-        EtlResult::Ok(start)
+        EtlResult::Ok(())
     }
     .await;
 
     let duration_milliseconds = (Utc::now() - start).num_milliseconds() as f64;
 
     match result {
-        Ok(timestamp) => {
+        Ok(()) => {
             metrics::record_maintenance_run(stream_id, duration_milliseconds, true);
-            Ok(timestamp)
+            Ok(scheduled_time)
         }
         Err(e) => {
             metrics::record_maintenance_run(stream_id, duration_milliseconds, false);

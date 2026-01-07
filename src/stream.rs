@@ -31,6 +31,10 @@ pub struct PgStream<Sink, SchemaStore> {
     store: StreamStore<SchemaStore>,
     sink: Sink,
     config: StreamConfig,
+
+    /// Task handle for the maintance task.
+    ///
+    /// Stores the time for which the executed maintenance was scheduled.
     maintenance_handle: TaskHandle<DateTime<Utc>>,
 }
 
@@ -49,7 +53,7 @@ where
         // run initial maintenance synchronously during startup if due
         let (_, next_maintenance_at) = store.get_stream_state().await?;
         if Utc::now() >= next_maintenance_at {
-            run_maintenance(&store).await?;
+            run_maintenance(&store, next_maintenance_at).await?;
             let next = next_maintenance_at + chrono::Duration::hours(24);
             store.store_next_maintenance_at(next).await?;
         }
@@ -124,17 +128,24 @@ where
         Ok(())
     }
 
+    /// Schedule the next maintenance by writing to the store
+    ///
+    /// * `prev_scheduled_at`: The time the previous maintenance was scheduled for. Used to compute the time for the next run.
+    async fn schedule_next_maintenance(&self, prev_scheduled_at: DateTime<Utc>) -> EtlResult<()> {
+        // Schedule next run 24h after the scheduled time
+        let next_run = prev_scheduled_at + chrono::Duration::hours(24);
+        self.store.store_next_maintenance_at(next_run).await?;
+        info!("Scheduled next maintenance for: {}", next_run);
+
+        Ok(())
+    }
+
     /// Handles background maintenance task lifecycle
     async fn handle_maintenance(&self, next_maintenance_at: DateTime<Utc>) -> EtlResult<()> {
-        // Check if previous maintenance completed and update schedule
-        if let Some(completed_at) = self.maintenance_handle.take_result().await {
-            // Schedule next run 24h after the SCHEDULED time, not execution time
-            let next_run = next_maintenance_at + chrono::Duration::hours(24);
-            self.store.store_next_maintenance_at(next_run).await?;
-            info!(
-                "Maintenance completed at {}, next scheduled: {}",
-                completed_at, next_run
-            );
+        // Check if previous maintenance completed and schedule the next one
+        if let Some(prev_scheduled_at) = self.maintenance_handle.take_result().await {
+            info!("Maintenance task completed");
+            self.schedule_next_maintenance(prev_scheduled_at).await?;
         }
 
         // Try to start maintenance if due (won't start if already running)
@@ -144,7 +155,7 @@ where
 
                 tokio::spawn(async move {
                     info!("Starting background maintenance task");
-                    match run_maintenance(&store).await {
+                    match run_maintenance(&store, next_maintenance_at).await {
                         Ok(ts) => {
                             let _ = tx.send(ts);
                         }
@@ -270,6 +281,15 @@ where
         }
 
         self.tick(stream_events).await?;
+
+        Ok(())
+    }
+
+    async fn shutdown(&self) -> EtlResult<()> {
+        if let Some(prev_scheduled_at) = self.maintenance_handle.wait().await {
+            info!("Maintenance task completed");
+            self.schedule_next_maintenance(prev_scheduled_at).await?;
+        }
 
         Ok(())
     }

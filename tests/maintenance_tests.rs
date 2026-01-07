@@ -75,7 +75,10 @@ async fn test_maintenance_creates_future_partitions() {
     let stream_store = StreamStore::create(test_stream_config(&db), store.clone())
         .await
         .unwrap();
-    run_maintenance(&stream_store).await.unwrap();
+    let scheduled_time = chrono::Utc::now();
+    run_maintenance(&stream_store, scheduled_time)
+        .await
+        .unwrap();
 
     // Should now have 7 partitions again (today + 6 days ahead)
     let count_after: (i64,) = sqlx::query_as(
@@ -130,7 +133,10 @@ async fn test_maintenance_drops_old_partitions() {
     let stream_store = StreamStore::create(test_stream_config(&db), store.clone())
         .await
         .unwrap();
-    run_maintenance(&stream_store).await.unwrap();
+    let scheduled_time = chrono::Utc::now();
+    run_maintenance(&stream_store, scheduled_time)
+        .await
+        .unwrap();
 
     // Old partition should be dropped
     let exists_after: (bool,) = sqlx::query_as(&format!(
@@ -163,7 +169,10 @@ async fn test_maintenance_updates_next_maintenance_at() {
     let (_status, next_before) = stream_store.get_stream_state().await.unwrap();
 
     // Run maintenance
-    let completed_at = run_maintenance(&stream_store).await.unwrap();
+    let scheduled_time = next_before;
+    let completed_at = run_maintenance(&stream_store, scheduled_time)
+        .await
+        .unwrap();
 
     // Update the next maintenance time
     let next_after = next_before + Duration::hours(24);
@@ -200,8 +209,13 @@ async fn test_maintenance_idempotent() {
         .unwrap();
 
     // Run maintenance twice
-    run_maintenance(&stream_store).await.unwrap();
-    run_maintenance(&stream_store).await.unwrap();
+    let scheduled_time = chrono::Utc::now();
+    run_maintenance(&stream_store, scheduled_time)
+        .await
+        .unwrap();
+    run_maintenance(&stream_store, scheduled_time)
+        .await
+        .unwrap();
 
     // Should still have the expected number of partitions
     let count: (i64,) = sqlx::query_as(
@@ -214,4 +228,78 @@ async fn test_maintenance_idempotent() {
     .unwrap();
 
     assert_eq!(count.0, 7, "Running maintenance twice should be idempotent");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_run_maintenance_returns_scheduled_time() {
+    let db = TestDatabase::spawn().await;
+    let config = test_stream_config(&db);
+    let sink = MemorySink::new();
+    let store = create_postgres_store(config.id, &db.config, &db.pool).await;
+
+    let _stream: PgStream<MemorySink, PostgresStore> =
+        PgStream::create(config, sink, store.clone()).await.unwrap();
+
+    let stream_store = StreamStore::create(test_stream_config(&db), store.clone())
+        .await
+        .unwrap();
+
+    // Use a specific scheduled_time (1 hour in the past)
+    let scheduled_time = chrono::Utc::now() - Duration::hours(1);
+    let returned_time = run_maintenance(&stream_store, scheduled_time)
+        .await
+        .unwrap();
+
+    // run_maintenance should return the scheduled_time, not the execution time
+    assert_eq!(
+        returned_time, scheduled_time,
+        "run_maintenance should return the scheduled_time passed to it"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_maintenance_scheduling_uses_scheduled_time_not_execution_time() {
+    let db = TestDatabase::spawn().await;
+    let config = test_stream_config(&db);
+    let sink = MemorySink::new();
+    let store = create_postgres_store(config.id, &db.config, &db.pool).await;
+
+    let _stream: PgStream<MemorySink, PostgresStore> =
+        PgStream::create(config, sink, store.clone()).await.unwrap();
+
+    let stream_store = StreamStore::create(test_stream_config(&db), store.clone())
+        .await
+        .unwrap();
+
+    // Simulate a maintenance that was scheduled for 2 hours ago
+    // This can happen if the system was down during the scheduled maintenance time
+    let original_scheduled_time = chrono::Utc::now() - Duration::hours(2);
+
+    // Run maintenance with the original scheduled time
+    let returned_time = run_maintenance(&stream_store, original_scheduled_time)
+        .await
+        .unwrap();
+
+    // The next maintenance should be scheduled 24h from the ORIGINAL scheduled time,
+    // not 24h from now. This ensures consistent daily scheduling even if
+    // maintenance runs late.
+    let expected_next_maintenance = original_scheduled_time + Duration::hours(24);
+    stream_store
+        .store_next_maintenance_at(expected_next_maintenance)
+        .await
+        .unwrap();
+
+    let (_status, actual_next_maintenance) = stream_store.get_stream_state().await.unwrap();
+
+    // Verify the next maintenance is scheduled based on the original scheduled time
+    assert_eq!(
+        actual_next_maintenance, expected_next_maintenance,
+        "Next maintenance should be 24h from original scheduled time, not from execution time"
+    );
+
+    // Also verify that the return value is the scheduled time
+    assert_eq!(
+        returned_time, original_scheduled_time,
+        "run_maintenance should return the scheduled_time for scheduling purposes"
+    );
 }
