@@ -7,6 +7,9 @@ version = "0.1.0"
 default    = []
 test-utils = ["dep:ctor", "dep:testcontainers", "dep:testcontainers-modules"]
 
+# Sink features.
+sink-elasticsearch = ["dep:elasticsearch", "dep:url"]
+
 [dependencies]
 anyhow = { version = "1.0.98", default-features = false, features = ["std"] }
 chrono = { version = "0.4.41", default-features = false }
@@ -54,9 +57,13 @@ tikv-jemallocator = { version = "0.6.1", default-features = false, features = [
 ] }
 
 
+# Optional sink dependencies.
+elasticsearch = { version = "8.19.0-alpha.1", optional = true, default-features = false, features = ["rustls-tls"] }
+url           = { version = "2.5", optional = true, default-features = false }
+
 ctor                   = { version = "0.4", optional = true }
 testcontainers         = { version = "0.23", optional = true, features = ["blocking"] }
-testcontainers-modules = { version = "0.11", optional = true, features = ["postgres", "blocking"] }
+testcontainers-modules = { version = "0.11", optional = true, features = ["postgres", "elastic_search", "blocking"] }
 
 [dev-dependencies]
 temp-env = "0.3"

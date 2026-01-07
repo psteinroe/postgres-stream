@@ -77,6 +77,19 @@ async fn run_pipeline(config: &PipelineConfig) -> EtlResult<()> {
     // Create sink based on configuration.
     let sink = match &config.sink {
         SinkConfig::Memory => AnySink::Memory(MemorySink::new()),
+
+        #[cfg(feature = "sink-elasticsearch")]
+        SinkConfig::Elasticsearch(cfg) => {
+            use crate::sink::elasticsearch::ElasticsearchSink;
+            let s = ElasticsearchSink::new(cfg.clone()).await.map_err(|e| {
+                etl::etl_error!(
+                    etl::error::ErrorKind::InvalidData,
+                    "Failed to create Elasticsearch sink",
+                    e.to_string()
+                )
+            })?;
+            AnySink::Elasticsearch(s)
+        }
     };
 
     // Create PgStream as an ETL destination
@@ -121,6 +134,13 @@ fn log_sink_config(config: &SinkConfig) {
     match config {
         SinkConfig::Memory => {
             debug!("using memory sink");
+        }
+
+        #[cfg(feature = "sink-elasticsearch")]
+        SinkConfig::Elasticsearch(cfg) => {
+            use crate::sink::elasticsearch::ElasticsearchSinkConfigWithoutSecrets;
+            let safe_cfg: ElasticsearchSinkConfigWithoutSecrets = cfg.into();
+            debug!(config = ?safe_cfg, "using elasticsearch sink");
         }
     }
 }

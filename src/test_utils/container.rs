@@ -2,6 +2,7 @@ use ctor::dtor;
 use etl::config::{PgConnectionConfig, TlsConfig};
 use std::sync::{Mutex, OnceLock};
 use testcontainers::{ContainerRequest, ImageExt, runners::SyncRunner};
+use testcontainers_modules::elastic_search::ElasticSearch;
 use testcontainers_modules::postgres::Postgres;
 use uuid::Uuid;
 
@@ -73,4 +74,47 @@ pub async fn test_pg_config() -> PgConnectionConfig {
         },
         keepalive: None,
     }
+}
+
+static ELASTICSEARCH_PORT: OnceLock<u16> = OnceLock::new();
+/// Using Mutex<Option<...>> so we can take ownership for cleanup.
+static ELASTICSEARCH_CONTAINER: OnceLock<Mutex<Option<testcontainers::Container<ElasticSearch>>>> =
+    OnceLock::new();
+
+/// Cleanup function that runs at program exit to stop and remove the Elasticsearch container.
+#[dtor]
+fn cleanup_elasticsearch_container() {
+    if let Some(mutex) = ELASTICSEARCH_CONTAINER.get() {
+        if let Ok(mut guard) = mutex.lock() {
+            if let Some(container) = guard.take() {
+                // rm() stops and removes the container.
+                let _ = container.rm();
+            }
+        }
+    }
+}
+
+/// Ensures an Elasticsearch container is running and returns its HTTP API port.
+///
+/// The container is reused across tests. Used for testing Elasticsearch sink.
+pub async fn ensure_elasticsearch() -> u16 {
+    *ELASTICSEARCH_PORT.get_or_init(|| {
+        std::thread::spawn(|| {
+            let container: ContainerRequest<ElasticSearch> = ElasticSearch::default().into();
+
+            let container = container
+                .start()
+                .expect("Failed to start Elasticsearch container");
+
+            let port = container
+                .get_host_port_ipv4(9200)
+                .expect("Failed to get Elasticsearch port");
+
+            let _ = ELASTICSEARCH_CONTAINER.set(Mutex::new(Some(container)));
+
+            port
+        })
+        .join()
+        .expect("Failed to join container startup thread")
+    })
 }
