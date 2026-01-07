@@ -3,20 +3,35 @@ use etl::config::{PgConnectionConfig, TlsConfig};
 use std::sync::{Mutex, OnceLock};
 use testcontainers::{ContainerRequest, ImageExt, runners::SyncRunner};
 use testcontainers_modules::postgres::Postgres;
+use testcontainers_modules::redis::Redis;
 use uuid::Uuid;
 
 static POSTGRES_PORT: OnceLock<u16> = OnceLock::new();
-// Using Mutex<Option<...>> so we can take ownership for cleanup
+static REDIS_PORT: OnceLock<u16> = OnceLock::new();
+
+// Using Mutex<Option<...>> so we can take ownership for cleanup.
 static POSTGRES_CONTAINER: OnceLock<Mutex<Option<testcontainers::Container<Postgres>>>> =
     OnceLock::new();
+static REDIS_CONTAINER: OnceLock<Mutex<Option<testcontainers::Container<Redis>>>> = OnceLock::new();
 
-/// Cleanup function that runs at program exit to stop and remove the postgres container
+/// Cleanup function that runs at program exit to stop and remove the postgres container.
 #[dtor]
 fn cleanup_postgres_container() {
     if let Some(mutex) = POSTGRES_CONTAINER.get() {
         if let Ok(mut guard) = mutex.lock() {
             if let Some(container) = guard.take() {
-                // rm() stops and removes the container
+                let _ = container.rm();
+            }
+        }
+    }
+}
+
+/// Cleanup function that runs at program exit to stop and remove the redis container.
+#[dtor]
+fn cleanup_redis_container() {
+    if let Some(mutex) = REDIS_CONTAINER.get() {
+        if let Ok(mut guard) = mutex.lock() {
+            if let Some(container) = guard.take() {
                 let _ = container.rm();
             }
         }
@@ -73,4 +88,27 @@ pub async fn test_pg_config() -> PgConnectionConfig {
         },
         keepalive: None,
     }
+}
+
+/// Ensures a Redis container is running and returns its port.
+///
+/// Uses singleton pattern to reuse the same container across tests.
+pub async fn ensure_redis() -> u16 {
+    *REDIS_PORT.get_or_init(|| {
+        std::thread::spawn(|| {
+            let container: ContainerRequest<Redis> = Redis::default().with_tag("7-alpine");
+
+            let container = container.start().expect("Failed to start redis container");
+
+            let port = container
+                .get_host_port_ipv4(6379)
+                .expect("Failed to get redis container port");
+
+            let _ = REDIS_CONTAINER.set(Mutex::new(Some(container)));
+
+            port
+        })
+        .join()
+        .expect("Failed to join redis container startup thread")
+    })
 }
