@@ -77,6 +77,19 @@ async fn run_pipeline(config: &PipelineConfig) -> EtlResult<()> {
     // Create sink based on configuration.
     let sink = match &config.sink {
         SinkConfig::Memory => AnySink::Memory(MemorySink::new()),
+
+        #[cfg(feature = "sink-meilisearch")]
+        SinkConfig::Meilisearch(cfg) => {
+            use crate::sink::meilisearch::MeilisearchSink;
+            let s = MeilisearchSink::new(cfg.clone()).await.map_err(|e| {
+                etl::etl_error!(
+                    etl::error::ErrorKind::InvalidData,
+                    "Failed to create Meilisearch sink",
+                    e.to_string()
+                )
+            })?;
+            AnySink::Meilisearch(s)
+        }
     };
 
     // Create PgStream as an ETL destination
@@ -121,6 +134,13 @@ fn log_sink_config(config: &SinkConfig) {
     match config {
         SinkConfig::Memory => {
             debug!("using memory sink");
+        }
+
+        #[cfg(feature = "sink-meilisearch")]
+        SinkConfig::Meilisearch(cfg) => {
+            use crate::sink::meilisearch::MeilisearchSinkConfigWithoutSecrets;
+            let safe_cfg: MeilisearchSinkConfigWithoutSecrets = cfg.into();
+            debug!(config = ?safe_cfg, "using meilisearch sink");
         }
     }
 }

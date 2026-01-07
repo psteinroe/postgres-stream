@@ -2,6 +2,7 @@ use ctor::dtor;
 use etl::config::{PgConnectionConfig, TlsConfig};
 use std::sync::{Mutex, OnceLock};
 use testcontainers::{ContainerRequest, ImageExt, runners::SyncRunner};
+use testcontainers_modules::meilisearch::Meilisearch;
 use testcontainers_modules::postgres::Postgres;
 use uuid::Uuid;
 
@@ -73,4 +74,47 @@ pub async fn test_pg_config() -> PgConnectionConfig {
         },
         keepalive: None,
     }
+}
+
+static MEILISEARCH_PORT: OnceLock<u16> = OnceLock::new();
+/// Using Mutex<Option<...>> so we can take ownership for cleanup.
+static MEILISEARCH_CONTAINER: OnceLock<Mutex<Option<testcontainers::Container<Meilisearch>>>> =
+    OnceLock::new();
+
+/// Cleanup function that runs at program exit to stop and remove the Meilisearch container.
+#[dtor]
+fn cleanup_meilisearch_container() {
+    if let Some(mutex) = MEILISEARCH_CONTAINER.get() {
+        if let Ok(mut guard) = mutex.lock() {
+            if let Some(container) = guard.take() {
+                // rm() stops and removes the container.
+                let _ = container.rm();
+            }
+        }
+    }
+}
+
+/// Ensures a Meilisearch container is running and returns its HTTP API port.
+///
+/// The container is reused across tests. Used for testing Meilisearch sink.
+pub async fn ensure_meilisearch() -> u16 {
+    *MEILISEARCH_PORT.get_or_init(|| {
+        std::thread::spawn(|| {
+            let container: ContainerRequest<Meilisearch> = Meilisearch::default().into();
+
+            let container = container
+                .start()
+                .expect("Failed to start Meilisearch container");
+
+            let port = container
+                .get_host_port_ipv4(7700)
+                .expect("Failed to get Meilisearch port");
+
+            let _ = MEILISEARCH_CONTAINER.set(Mutex::new(Some(container)));
+
+            port
+        })
+        .join()
+        .expect("Failed to join container startup thread")
+    })
 }
