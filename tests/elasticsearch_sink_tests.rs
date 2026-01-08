@@ -27,7 +27,7 @@ fn make_test_event(key: &str) -> TriggeredEvent {
 
 /// Creates an Elasticsearch client for testing.
 async fn create_test_client(port: u16) -> Elasticsearch {
-    let url = format!("http://127.0.0.1:{}", port);
+    let url = format!("http://127.0.0.1:{port}");
     let transport = Transport::single_node(&url).expect("Failed to create transport");
     Elasticsearch::new(transport)
 }
@@ -39,11 +39,13 @@ async fn test_elasticsearch_sink_indexes_events() {
 
     // Create sink.
     let config = ElasticsearchSinkConfig {
-        url: format!("http://127.0.0.1:{}", port),
+        url: format!("http://127.0.0.1:{port}"),
         index: Some(index_name.clone()),
     };
 
-    let sink = ElasticsearchSink::new(config).await.expect("Failed to create sink");
+    let sink = ElasticsearchSink::new(config)
+        .await
+        .expect("Failed to create sink");
 
     // Publish events.
     let event1 = make_test_event("event1");
@@ -73,8 +75,7 @@ async fn test_elasticsearch_sink_indexes_events() {
 
     assert!(
         response.status_code().is_success(),
-        "Document not found: {}",
-        event1_id
+        "Document not found: {event1_id}"
     );
 
     let response = client
@@ -85,8 +86,7 @@ async fn test_elasticsearch_sink_indexes_events() {
 
     assert!(
         response.status_code().is_success(),
-        "Document not found: {}",
-        event2_id
+        "Document not found: {event2_id}"
     );
 }
 
@@ -96,11 +96,13 @@ async fn test_elasticsearch_sink_handles_empty_batch() {
     let index_name = format!("test-index-{}", Uuid::new_v4());
 
     let config = ElasticsearchSinkConfig {
-        url: format!("http://127.0.0.1:{}", port),
+        url: format!("http://127.0.0.1:{port}"),
         index: Some(index_name),
     };
 
-    let sink = ElasticsearchSink::new(config).await.expect("Failed to create sink");
+    let sink = ElasticsearchSink::new(config)
+        .await
+        .expect("Failed to create sink");
 
     // Publishing empty batch should succeed without making any API calls.
     sink.publish_events(vec![])
@@ -114,11 +116,13 @@ async fn test_elasticsearch_sink_indexes_only_payload() {
     let index_name = format!("test-index-{}", Uuid::new_v4());
 
     let config = ElasticsearchSinkConfig {
-        url: format!("http://127.0.0.1:{}", port),
+        url: format!("http://127.0.0.1:{port}"),
         index: Some(index_name.clone()),
     };
 
-    let sink = ElasticsearchSink::new(config).await.expect("Failed to create sink");
+    let sink = ElasticsearchSink::new(config)
+        .await
+        .expect("Failed to create sink");
 
     // Create event with metadata.
     let event = TriggeredEvent {
@@ -172,11 +176,13 @@ async fn test_elasticsearch_sink_searchable() {
     let index_name = format!("test-index-{}", Uuid::new_v4());
 
     let config = ElasticsearchSinkConfig {
-        url: format!("http://127.0.0.1:{}", port),
+        url: format!("http://127.0.0.1:{port}"),
         index: Some(index_name.clone()),
     };
 
-    let sink = ElasticsearchSink::new(config).await.expect("Failed to create sink");
+    let sink = ElasticsearchSink::new(config)
+        .await
+        .expect("Failed to create sink");
 
     // Publish events with different keys.
     let events = vec![
@@ -185,7 +191,9 @@ async fn test_elasticsearch_sink_searchable() {
         make_test_event("gamma"),
     ];
 
-    sink.publish_events(events).await.expect("Failed to publish");
+    sink.publish_events(events)
+        .await
+        .expect("Failed to publish");
 
     // Refresh index.
     let client = create_test_client(port).await;
@@ -224,11 +232,13 @@ async fn test_elasticsearch_sink_uses_index_from_metadata() {
 
     // Create sink with NO default index.
     let config = ElasticsearchSinkConfig {
-        url: format!("http://127.0.0.1:{}", port),
+        url: format!("http://127.0.0.1:{port}"),
         index: None,
     };
 
-    let sink = ElasticsearchSink::new(config).await.expect("Failed to create sink");
+    let sink = ElasticsearchSink::new(config)
+        .await
+        .expect("Failed to create sink");
 
     // Create event with index in metadata.
     let event = TriggeredEvent {

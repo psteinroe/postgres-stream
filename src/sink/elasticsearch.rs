@@ -75,8 +75,8 @@ fn extract_host(url: &str) -> String {
     // Parse URL and extract just the host:port portion.
     if let Ok(parsed) = url::Url::parse(url) {
         if let Some(host) = parsed.host_str() {
-            let port = parsed.port().map(|p| format!(":{}", p)).unwrap_or_default();
-            return format!("{}{}", host, port);
+            let port = parsed.port().map(|p| format!(":{p}")).unwrap_or_default();
+            return format!("{host}{port}");
         }
     }
     // Fallback: return as-is if parsing fails.
@@ -140,7 +140,8 @@ impl Sink for ElasticsearchSink {
         }
 
         // Build bulk operations.
-        let mut operations: Vec<BulkOperation<serde_json::Value>> = Vec::with_capacity(events.len());
+        let mut operations: Vec<BulkOperation<serde_json::Value>> =
+            Vec::with_capacity(events.len());
 
         for event in &events {
             // Resolve target index for this event.
@@ -250,6 +251,9 @@ mod tests {
 
     #[test]
     fn test_extract_host_no_port() {
-        assert_eq!(extract_host("http://elasticsearch.local"), "elasticsearch.local");
+        assert_eq!(
+            extract_host("http://elasticsearch.local"),
+            "elasticsearch.local"
+        );
     }
 }
