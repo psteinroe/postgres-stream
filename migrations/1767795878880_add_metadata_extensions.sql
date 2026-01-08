@@ -3,8 +3,11 @@
 ALTER TABLE pgstream.subscriptions
 ADD COLUMN IF NOT EXISTS metadata_extensions jsonb DEFAULT '[]'::jsonb;
 
--- Function to build metadata from extensions (same logic as build_payload_from_extensions).
-CREATE OR REPLACE FUNCTION pgstream.build_metadata_from_extensions(p_extensions jsonb)
+-- Drop old function and recreate with generic name.
+-- Both payload_extensions and metadata_extensions use the same structure.
+DROP FUNCTION IF EXISTS pgstream.build_payload_from_extensions(jsonb);
+
+CREATE OR REPLACE FUNCTION pgstream.build_extensions(p_extensions jsonb)
 RETURNS text
 LANGUAGE plpgsql
 STABLE
@@ -152,9 +155,9 @@ begin
                     subscription.key,
                     (select string_agg(format($s$%L, new.%I$s$, column_name, column_name), ', ') from unnest(subscription.column_names) as column_name),
                     (select string_agg(format($s$%L, old.%I$s$, column_name, column_name), ', ') from unnest(subscription.column_names) as column_name),
-                    pgstream.build_payload_from_extensions(subscription.payload_extensions),
+                    pgstream.build_extensions(subscription.payload_extensions),
                     subscription.metadata,
-                    pgstream.build_metadata_from_extensions(subscription.metadata_extensions)
+                    pgstream.build_extensions(subscription.metadata_extensions)
                 ), e'\n') from pgstream.subscriptions as subscription where table_name = v_table_name and schema_name = v_schema_name and operation = v_op
             );
 

@@ -29,11 +29,34 @@ async fn create_subscription(
     when_clause: Option<&str>,
     payload_extensions: Option<serde_json::Value>,
 ) -> sqlx::types::Uuid {
+    create_subscription_full(
+        pool,
+        key,
+        stream_id,
+        operation,
+        when_clause,
+        payload_extensions,
+        None,
+        None,
+    )
+    .await
+}
+
+async fn create_subscription_full(
+    pool: &PgPool,
+    key: &str,
+    stream_id: i64,
+    operation: &str,
+    when_clause: Option<&str>,
+    payload_extensions: Option<serde_json::Value>,
+    metadata: Option<serde_json::Value>,
+    metadata_extensions: Option<serde_json::Value>,
+) -> sqlx::types::Uuid {
     let row = sqlx::query(
         r#"
         insert into pgstream.subscriptions
-            (key, stream_id, operation, schema_name, table_name, when_clause, column_names, payload_extensions)
-        values ($1, $2, $3::pgstream.operation_type, 'public', 'users', $4, array['id', 'name', 'email', 'age'], $5)
+            (key, stream_id, operation, schema_name, table_name, when_clause, column_names, payload_extensions, metadata, metadata_extensions)
+        values ($1, $2, $3::pgstream.operation_type, 'public', 'users', $4, array['id', 'name', 'email', 'age'], $5, $6, $7)
         returning id
         "#,
     )
@@ -42,6 +65,8 @@ async fn create_subscription(
     .bind(operation)
     .bind(when_clause)
     .bind(payload_extensions.unwrap_or(serde_json::json!([])))
+    .bind(metadata)
+    .bind(metadata_extensions.unwrap_or(serde_json::json!([])))
     .fetch_one(pool)
     .await
     .expect("Failed to create subscription");
@@ -91,6 +116,33 @@ async fn get_events_with_lsn(
             let payload = row.get::<serde_json::Value, _>("payload");
             let lsn = row.get::<Option<String>, _>("lsn");
             (payload, lsn)
+        })
+        .collect()
+}
+
+/// Helper to get events with their metadata
+async fn get_events_with_metadata(
+    pool: &PgPool,
+    stream_id: i64,
+) -> Vec<(serde_json::Value, Option<serde_json::Value>)> {
+    let rows = sqlx::query(
+        r#"
+        select payload, metadata
+        from pgstream.events
+        where stream_id = $1
+        order by created_at, id
+        "#,
+    )
+    .bind(stream_id)
+    .fetch_all(pool)
+    .await
+    .expect("Failed to fetch events");
+
+    rows.into_iter()
+        .map(|row| {
+            let payload = row.get::<serde_json::Value, _>("payload");
+            let metadata = row.get::<Option<serde_json::Value>, _>("metadata");
+            (payload, metadata)
         })
         .collect()
 }
@@ -299,13 +351,13 @@ async fn test_payload_extensions() {
     )
     .await;
 
-    // Verify build_payload_from_extensions generates valid SQL
+    // Verify build_extensions generates valid SQL
     let payload_expr: String =
-        sqlx::query_scalar("select pgstream.build_payload_from_extensions($1)")
+        sqlx::query_scalar("select pgstream.build_extensions($1)")
             .bind(&payload_extensions)
             .fetch_one(&db.pool)
             .await
-            .expect("Failed to get build_payload_from_extensions result");
+            .expect("Failed to get build_extensions result");
 
     // Assert the SQL expression contains expected JSONB operations
     assert!(
@@ -577,4 +629,220 @@ async fn test_lsn_can_be_used_for_queries() {
         3,
         "Should find 3 events after the second event's LSN"
     );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_static_metadata() {
+    let db = TestDatabase::spawn().await;
+    db.ensure_today_partition().await;
+
+    create_test_table(&db.pool).await;
+
+    // Create subscription with static metadata
+    let metadata = serde_json::json!({
+        "queue_url": "https://sqs.us-east-1.amazonaws.com/123456789/my-queue",
+        "routing_key": "users.created"
+    });
+
+    create_subscription_full(
+        &db.pool,
+        "user_with_metadata",
+        10,
+        "INSERT",
+        None,
+        None,
+        Some(metadata),
+        None,
+    )
+    .await;
+
+    // Insert a user
+    sqlx::query(
+        r#"
+        insert into public.users (name, email, age)
+        values ('MetadataUser', 'metadata@example.com', 30)
+        "#,
+    )
+    .execute(&db.pool)
+    .await
+    .expect("Failed to insert user");
+
+    // Verify event has static metadata
+    let events = get_events_with_metadata(&db.pool, 10).await;
+    assert_eq!(events.len(), 1);
+
+    let (payload, metadata) = events.first().expect("Should have 1 event");
+    assert_eq!(payload["new"]["name"], "MetadataUser");
+
+    let metadata = metadata.as_ref().expect("Should have metadata");
+    assert_eq!(
+        metadata["queue_url"],
+        "https://sqs.us-east-1.amazonaws.com/123456789/my-queue"
+    );
+    assert_eq!(metadata["routing_key"], "users.created");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_metadata_extensions() {
+    let db = TestDatabase::spawn().await;
+    db.ensure_today_partition().await;
+
+    create_test_table(&db.pool).await;
+
+    // Create subscription with dynamic metadata extensions
+    // These compute metadata values from row data at trigger time
+    let metadata_extensions = serde_json::json!([
+        {"json_path": "index", "expression": "'users-' || new.id::text"},
+        {"json_path": "partition_key", "expression": "new.email"}
+    ]);
+
+    create_subscription_full(
+        &db.pool,
+        "user_with_dynamic_metadata",
+        11,
+        "INSERT",
+        None,
+        None,
+        None,
+        Some(metadata_extensions),
+    )
+    .await;
+
+    // Insert a user
+    sqlx::query(
+        r#"
+        insert into public.users (name, email, age)
+        values ('DynamicUser', 'dynamic@example.com', 25)
+        "#,
+    )
+    .execute(&db.pool)
+    .await
+    .expect("Failed to insert user");
+
+    // Verify event has dynamic metadata
+    let events = get_events_with_metadata(&db.pool, 11).await;
+    assert_eq!(events.len(), 1);
+
+    let (payload, metadata) = events.first().expect("Should have 1 event");
+    let user_id = payload["new"]["id"].as_i64().expect("Should have id");
+
+    let metadata = metadata.as_ref().expect("Should have metadata");
+    assert_eq!(metadata["index"], format!("users-{}", user_id));
+    assert_eq!(metadata["partition_key"], "dynamic@example.com");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_merged_static_and_dynamic_metadata() {
+    let db = TestDatabase::spawn().await;
+    db.ensure_today_partition().await;
+
+    create_test_table(&db.pool).await;
+
+    // Create subscription with both static and dynamic metadata
+    let static_metadata = serde_json::json!({
+        "sink_type": "elasticsearch",
+        "environment": "test"
+    });
+
+    let metadata_extensions = serde_json::json!([
+        {"json_path": "index", "expression": "'users-' || to_char(now(), 'YYYY-MM')"},
+        {"json_path": "doc_id", "expression": "new.id::text"}
+    ]);
+
+    create_subscription_full(
+        &db.pool,
+        "user_with_merged_metadata",
+        12,
+        "INSERT",
+        None,
+        None,
+        Some(static_metadata),
+        Some(metadata_extensions),
+    )
+    .await;
+
+    // Insert a user
+    sqlx::query(
+        r#"
+        insert into public.users (name, email, age)
+        values ('MergedUser', 'merged@example.com', 35)
+        "#,
+    )
+    .execute(&db.pool)
+    .await
+    .expect("Failed to insert user");
+
+    // Verify event has both static and dynamic metadata merged
+    let events = get_events_with_metadata(&db.pool, 12).await;
+    assert_eq!(events.len(), 1);
+
+    let (payload, metadata) = events.first().expect("Should have 1 event");
+    let user_id = payload["new"]["id"].as_i64().expect("Should have id");
+
+    let metadata = metadata.as_ref().expect("Should have metadata");
+
+    // Static metadata
+    assert_eq!(metadata["sink_type"], "elasticsearch");
+    assert_eq!(metadata["environment"], "test");
+
+    // Dynamic metadata
+    assert!(
+        metadata["index"].as_str().unwrap().starts_with("users-"),
+        "Index should start with 'users-'"
+    );
+    assert_eq!(metadata["doc_id"], user_id.to_string());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_metadata_extensions_with_nested_paths() {
+    let db = TestDatabase::spawn().await;
+    db.ensure_today_partition().await;
+
+    create_test_table(&db.pool).await;
+
+    // Create subscription with nested metadata paths
+    let metadata_extensions = serde_json::json!([
+        {"json_path": "routing.region", "expression": "'us-east-1'"},
+        {"json_path": "routing.shard", "expression": "new.id % 10"},
+        {"json_path": "tags.source", "expression": "'postgres'"}
+    ]);
+
+    create_subscription_full(
+        &db.pool,
+        "user_with_nested_metadata",
+        13,
+        "INSERT",
+        None,
+        None,
+        None,
+        Some(metadata_extensions),
+    )
+    .await;
+
+    // Insert a user
+    sqlx::query(
+        r#"
+        insert into public.users (name, email, age)
+        values ('NestedUser', 'nested@example.com', 40)
+        "#,
+    )
+    .execute(&db.pool)
+    .await
+    .expect("Failed to insert user");
+
+    // Verify event has nested metadata structure
+    let events = get_events_with_metadata(&db.pool, 13).await;
+    assert_eq!(events.len(), 1);
+
+    let (payload, metadata) = events.first().expect("Should have 1 event");
+    let user_id = payload["new"]["id"].as_i64().expect("Should have id");
+
+    let metadata = metadata.as_ref().expect("Should have metadata");
+
+    // Nested routing object
+    assert_eq!(metadata["routing"]["region"], "us-east-1");
+    assert_eq!(metadata["routing"]["shard"], user_id % 10);
+
+    // Nested tags object
+    assert_eq!(metadata["tags"]["source"], "postgres");
 }
