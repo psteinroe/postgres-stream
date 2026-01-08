@@ -25,7 +25,7 @@ fn make_test_event(key: &str) -> TriggeredEvent {
 
 /// Creates a Meilisearch client for testing.
 fn create_test_client(port: u16) -> Client {
-    let url = format!("http://127.0.0.1:{}", port);
+    let url = format!("http://127.0.0.1:{port}");
     Client::new(&url, Option::<&str>::None).expect("Failed to create client")
 }
 
@@ -36,12 +36,14 @@ async fn test_meilisearch_sink_indexes_events() {
 
     // Create sink.
     let config = MeilisearchSinkConfig {
-        url: format!("http://127.0.0.1:{}", port),
+        url: format!("http://127.0.0.1:{port}"),
         index: Some(index_name.clone()),
         api_key: None,
     };
 
-    let sink = MeilisearchSink::new(config).await.expect("Failed to create sink");
+    let sink = MeilisearchSink::new(config)
+        .await
+        .expect("Failed to create sink");
 
     // Publish events.
     let event1 = make_test_event("event1");
@@ -76,12 +78,14 @@ async fn test_meilisearch_sink_handles_empty_batch() {
     let index_name = format!("test-index-{}", Uuid::new_v4());
 
     let config = MeilisearchSinkConfig {
-        url: format!("http://127.0.0.1:{}", port),
+        url: format!("http://127.0.0.1:{port}"),
         index: Some(index_name),
         api_key: None,
     };
 
-    let sink = MeilisearchSink::new(config).await.expect("Failed to create sink");
+    let sink = MeilisearchSink::new(config)
+        .await
+        .expect("Failed to create sink");
 
     // Publishing empty batch should succeed without making any API calls.
     sink.publish_events(vec![])
@@ -95,12 +99,14 @@ async fn test_meilisearch_sink_indexes_only_payload() {
     let index_name = format!("test-index-{}", Uuid::new_v4());
 
     let config = MeilisearchSinkConfig {
-        url: format!("http://127.0.0.1:{}", port),
+        url: format!("http://127.0.0.1:{port}"),
         index: Some(index_name.clone()),
         api_key: None,
     };
 
-    let sink = MeilisearchSink::new(config).await.expect("Failed to create sink");
+    let sink = MeilisearchSink::new(config)
+        .await
+        .expect("Failed to create sink");
 
     // Create event with metadata.
     let event = TriggeredEvent {
@@ -142,12 +148,14 @@ async fn test_meilisearch_sink_searchable() {
     let index_name = format!("test-index-{}", Uuid::new_v4());
 
     let config = MeilisearchSinkConfig {
-        url: format!("http://127.0.0.1:{}", port),
+        url: format!("http://127.0.0.1:{port}"),
         index: Some(index_name.clone()),
         api_key: None,
     };
 
-    let sink = MeilisearchSink::new(config).await.expect("Failed to create sink");
+    let sink = MeilisearchSink::new(config)
+        .await
+        .expect("Failed to create sink");
 
     // Publish events with different keys.
     let events = vec![
@@ -156,7 +164,9 @@ async fn test_meilisearch_sink_searchable() {
         make_test_event("gamma"),
     ];
 
-    sink.publish_events(events).await.expect("Failed to publish");
+    sink.publish_events(events)
+        .await
+        .expect("Failed to publish");
 
     // Search for documents.
     let client = create_test_client(port);
@@ -186,12 +196,14 @@ async fn test_meilisearch_sink_uses_index_from_metadata() {
 
     // Create sink with NO default index.
     let config = MeilisearchSinkConfig {
-        url: format!("http://127.0.0.1:{}", port),
+        url: format!("http://127.0.0.1:{port}"),
         index: None,
         api_key: None,
     };
 
-    let sink = MeilisearchSink::new(config).await.expect("Failed to create sink");
+    let sink = MeilisearchSink::new(config)
+        .await
+        .expect("Failed to create sink");
 
     // Create event with index in metadata.
     let event = TriggeredEvent {
