@@ -4,9 +4,9 @@ name    = "postgres-stream"
 version = "0.1.0"
 
 [features]
-default           = []
-test-utils        = ["dep:ctor", "dep:testcontainers", "dep:testcontainers-modules"]
+default            = []
 sink-redis-strings = ["dep:redis"]
+test-utils         = ["dep:ctor", "dep:testcontainers", "dep:testcontainers-modules"]
 
 [dependencies]
 anyhow = { version = "1.0.98", default-features = false, features = ["std"] }

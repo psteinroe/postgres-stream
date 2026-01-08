@@ -2,8 +2,8 @@
 
 #![cfg(feature = "sink-redis-strings")]
 
-use postgres_stream::sink::redis_strings::{RedisStringsSink, RedisStringsSinkConfig};
 use postgres_stream::sink::Sink;
+use postgres_stream::sink::redis_strings::{RedisStringsSink, RedisStringsSinkConfig};
 use postgres_stream::test_utils::ensure_redis;
 use postgres_stream::types::{EventIdentifier, StreamId, TriggeredEvent};
 
@@ -27,7 +27,7 @@ fn make_test_event(id: &str) -> TriggeredEvent {
 #[tokio::test(flavor = "multi_thread")]
 async fn test_redis_strings_sink_publishes_events() {
     let redis_port = ensure_redis().await;
-    let redis_url = format!("redis://127.0.0.1:{}", redis_port);
+    let redis_url = format!("redis://127.0.0.1:{redis_port}");
 
     let config = RedisStringsSinkConfig {
         url: redis_url.clone(),
@@ -71,7 +71,7 @@ async fn test_redis_strings_sink_publishes_events() {
 #[tokio::test(flavor = "multi_thread")]
 async fn test_redis_strings_sink_with_key_prefix() {
     let redis_port = ensure_redis().await;
-    let redis_url = format!("redis://127.0.0.1:{}", redis_port);
+    let redis_url = format!("redis://127.0.0.1:{redis_port}");
 
     let config = RedisStringsSinkConfig {
         url: redis_url.clone(),
@@ -107,7 +107,7 @@ async fn test_redis_strings_sink_with_key_prefix() {
 #[tokio::test(flavor = "multi_thread")]
 async fn test_redis_strings_sink_empty_batch() {
     let redis_port = ensure_redis().await;
-    let redis_url = format!("redis://127.0.0.1:{}", redis_port);
+    let redis_url = format!("redis://127.0.0.1:{redis_port}");
 
     let config = RedisStringsSinkConfig {
         url: redis_url,
@@ -127,7 +127,7 @@ async fn test_redis_strings_sink_empty_batch() {
 #[tokio::test(flavor = "multi_thread")]
 async fn test_redis_strings_sink_uses_key_from_metadata() {
     let redis_port = ensure_redis().await;
-    let redis_url = format!("redis://127.0.0.1:{}", redis_port);
+    let redis_url = format!("redis://127.0.0.1:{redis_port}");
 
     let config = RedisStringsSinkConfig {
         url: redis_url.clone(),
