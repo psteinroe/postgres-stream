@@ -180,8 +180,8 @@ begin
                     %s
 
                     if array_length(v_payloads, 1) > 0 then
-                        insert into pgstream.events (payload, metadata, stream_id)
-                        select p, m, %L
+                        insert into pgstream.events (payload, metadata, stream_id, lsn)
+                        select p, m, %L, pg_current_wal_lsn()
                         from unnest(v_payloads, v_metadatas) as t(p, m);
                     end if;
 
