@@ -5,7 +5,7 @@
 use crate::{
     config::{PipelineConfig, SinkConfig},
     migrations::migrate_etl,
-    sink::memory::MemorySink,
+    sink::{AnySink, memory::MemorySink},
     slot_recovery::{handle_slot_recovery, is_slot_invalidation_error},
     stream::PgStream,
 };
@@ -74,9 +74,9 @@ async fn run_pipeline(config: &PipelineConfig) -> EtlResult<()> {
     // Initialize state store for ETL pipeline state tracking
     let state_store = PostgresStore::new(config.stream.id, config.stream.pg_connection.clone());
 
-    // Create sink based on configuration
+    // Create sink based on configuration.
     let sink = match &config.sink {
-        SinkConfig::Memory => MemorySink::new(),
+        SinkConfig::Memory => AnySink::Memory(MemorySink::new()),
     };
 
     // Create PgStream as an ETL destination
