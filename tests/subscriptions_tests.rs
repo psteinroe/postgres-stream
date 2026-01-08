@@ -352,12 +352,11 @@ async fn test_payload_extensions() {
     .await;
 
     // Verify build_extensions generates valid SQL
-    let payload_expr: String =
-        sqlx::query_scalar("select pgstream.build_extensions($1)")
-            .bind(&payload_extensions)
-            .fetch_one(&db.pool)
-            .await
-            .expect("Failed to get build_extensions result");
+    let payload_expr: String = sqlx::query_scalar("select pgstream.build_extensions($1)")
+        .bind(&payload_extensions)
+        .fetch_one(&db.pool)
+        .await
+        .expect("Failed to get build_extensions result");
 
     // Assert the SQL expression contains expected JSONB operations
     assert!(
@@ -727,7 +726,7 @@ async fn test_metadata_extensions() {
     let user_id = payload["new"]["id"].as_i64().expect("Should have id");
 
     let metadata = metadata.as_ref().expect("Should have metadata");
-    assert_eq!(metadata["index"], format!("users-{}", user_id));
+    assert_eq!(metadata["index"], format!("users-{user_id}"));
     assert_eq!(metadata["partition_key"], "dynamic@example.com");
 }
 
