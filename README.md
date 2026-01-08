@@ -208,7 +208,8 @@ begin
     target.when_clause is distinct from source.when_clause or
     target.column_names is distinct from source.column_names or
     target.metadata is distinct from source.metadata or
-    target.payload_extensions is distinct from source.payload_extensions
+    target.payload_extensions is distinct from source.payload_extensions or
+    target.metadata_extensions is distinct from source.metadata_extensions
   ) then update set
     operation = source.operation,
     schema_name = source.schema_name,
@@ -216,14 +217,15 @@ begin
     when_clause = source.when_clause,
     column_names = source.column_names,
     metadata = source.metadata,
-    payload_extensions = source.payload_extensions
+    payload_extensions = source.payload_extensions,
+    metadata_extensions = source.metadata_extensions
   when not matched then insert (
     key, stream_id, operation, schema_name, table_name,
-    when_clause, column_names, metadata, payload_extensions
+    when_clause, column_names, metadata, payload_extensions, metadata_extensions
   ) values (
     source.key, p_stream_id, source.operation, source.schema_name,
     source.table_name, source.when_clause, source.column_names,
-    source.metadata, source.payload_extensions
+    source.metadata, source.payload_extensions, source.metadata_extensions
   );
 
   -- Remove subscriptions not in input
@@ -267,9 +269,9 @@ The sink receives:
 }
 ```
 
-### 6. Add Metadata with Payload Extensions
+### 6. Payload Extensions
 
-Add dynamic routing information or static metadata using `payload_extensions`:
+Use `payload_extensions` to add computed fields to the event payload:
 
 ```sql
 insert into pgstream.subscriptions (
@@ -284,8 +286,8 @@ insert into pgstream.subscriptions (
   null,
   array['id', 'user_id', 'total'],
   '[
-    {"json_path": "group_id", "expression": "new.user_id::text"},
-    {"json_path": "queue_name", "expression": "''orders-high-priority''"}
+    {"json_path": "order_date", "expression": "new.created_at::date::text"},
+    {"json_path": "total_formatted", "expression": "''$'' || new.total::text"}
   ]'::jsonb
 );
 ```
@@ -296,16 +298,115 @@ Result:
 {
   "tg_name": "order-notification",
   "new": {"id": 456, "user_id": 123, "total": 99.99},
-  "group_id": "123",
-  "queue_name": "orders-high-priority"
+  "order_date": "2024-12-12",
+  "total_formatted": "$99.99"
 }
 ```
 
 Common use cases:
-- **Routing**: Add `group_id` for partitioning in Kafka/queues
-- **Static metadata**: Add `queue_name`, `priority`, `tenant_id`
-- **Dynamic values**: Add computed fields like `new.created_at::date`
-- **Context info**: Add `auth.user_id()`, `current_setting('app.tenant_id')`
+- **Computed fields**: Add derived values like `new.created_at::date`
+- **Formatted values**: Add display-ready strings
+- **Context info**: Add `auth.uid()`, `current_setting('app.tenant_id')`
+
+> **Note:** For routing information (topic, queue, partition key, etc.), use `metadata` and `metadata_extensions` instead.
+
+### 7. Event Metadata
+
+Use metadata for routing and sink configuration (topic, queue, partition key, index, etc.). Metadata is stored separately from the payload and read by sinks to determine where and how to deliver events.
+
+#### Static Metadata
+
+Use the `metadata` column for routing values that are the same for every event:
+
+```sql
+insert into pgstream.subscriptions (
+  key, stream_id, operation, schema_name, table_name,
+  column_names, metadata
+) values (
+  'user-events',
+  1,
+  'INSERT',
+  'public',
+  'users',
+  array['id', 'email'],
+  '{"topic": "user-events", "priority": "high"}'::jsonb
+);
+```
+
+#### Dynamic Metadata (metadata_extensions)
+
+Use `metadata_extensions` to compute routing values from row data. The format is identical to `payload_extensions`. You can use any SQL expression, including Supabase auth functions:
+
+```sql
+insert into pgstream.subscriptions (
+  key, stream_id, operation, schema_name, table_name,
+  column_names, metadata_extensions
+) values (
+  'user-events',
+  1,
+  'INSERT',
+  'public',
+  'users',
+  array['id', 'email'],
+  '[
+    {"json_path": "partition_key", "expression": "new.user_id::text"},
+    {"json_path": "topic", "expression": "''users-'' || new.region"}
+  ]'::jsonb
+);
+```
+
+#### Nested Paths
+
+Use dot notation in `json_path` to create nested objects:
+
+```sql
+'[
+  {"json_path": "auth.user_id", "expression": "auth.uid()::text"},
+  {"json_path": "auth.role", "expression": "auth.role()"}
+]'::jsonb
+```
+
+This produces:
+```json
+{
+  "auth": {
+    "user_id": "d0c12345-abcd-1234-efgh-567890abcdef",
+    "role": "authenticated"
+  }
+}
+```
+
+#### Combined Example
+
+You can use both static and dynamic metadata together:
+
+```sql
+insert into pgstream.subscriptions (
+  key, stream_id, operation, schema_name, table_name,
+  column_names, metadata, metadata_extensions
+) values (
+  'user-events',
+  1,
+  'INSERT',
+  'public',
+  'users',
+  array['id', 'email'],
+  '{"priority": "high"}'::jsonb,
+  '[
+    {"json_path": "topic", "expression": "''users-'' || new.region"},
+    {"json_path": "partition_key", "expression": "new.user_id::text"}
+  ]'::jsonb
+);
+```
+
+The resulting event metadata merges static and dynamic values:
+```json
+{
+  "priority": "high",
+  "topic": "users-eu-west-1",
+  "partition_key": "123"
+}
+```
 
 ## How Failover Works
 
