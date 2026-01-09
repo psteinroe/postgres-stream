@@ -269,7 +269,29 @@ The sink receives:
 }
 ```
 
-### 6. Payload Extensions
+### 6. Manual Event Insertion
+
+You can also insert events directly into the `pgstream.events` table instead of using subscriptions. This is useful for custom events not tied to table changes, background jobs, or events from external sources.
+
+```sql
+insert into pgstream.events (payload, stream_id, metadata)
+values (
+  '{"type": "job-completed", "job_id": 123, "result": "success"}'::jsonb,
+  1,  -- Stream ID from config
+  '{"topic": "background-jobs"}'::jsonb
+);
+```
+
+Required fields:
+- `payload` (jsonb) - The event data
+- `stream_id` (bigint) - Must match the stream ID from your config
+
+Optional:
+- `metadata` (jsonb) - Routing information (topic, partition key, etc.)
+
+The `id` and `created_at` fields are auto-generated.
+
+### 7. Payload Extensions
 
 Use `payload_extensions` to add computed fields to the event payload:
 
@@ -310,7 +332,7 @@ Common use cases:
 
 > **Note:** For routing information (topic, queue, partition key, etc.), use `metadata` and `metadata_extensions` instead.
 
-### 7. Event Metadata
+### 8. Event Metadata
 
 Use metadata for routing and sink configuration (topic, queue, partition key, index, etc.). Metadata is stored separately from the payload and read by sinks to determine where and how to deliver events.
 
