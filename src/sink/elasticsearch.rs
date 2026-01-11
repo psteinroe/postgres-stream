@@ -185,30 +185,6 @@ impl Sink for ElasticsearchSink {
             ));
         }
 
-        // Check for item-level errors.
-        let body = response.json::<serde_json::Value>().await.map_err(|e| {
-            etl::etl_error!(
-                etl::error::ErrorKind::DestinationError,
-                "Failed to parse bulk response",
-                e.to_string()
-            )
-        })?;
-
-        if body["errors"].as_bool().unwrap_or(false) {
-            // Return first error for debugging.
-            if let Some(items) = body["items"].as_array() {
-                for item in items {
-                    if let Some(error) = item["index"]["error"].as_object() {
-                        return Err(etl::etl_error!(
-                            etl::error::ErrorKind::DestinationError,
-                            "Elasticsearch indexing error",
-                            format!("{:?}", error)
-                        ));
-                    }
-                }
-            }
-        }
-
         Ok(())
     }
 }
