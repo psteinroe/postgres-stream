@@ -24,6 +24,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use etl::error::EtlResult;
+use futures::future::try_join_all;
 use meilisearch_sdk::client::Client;
 use serde::{Deserialize, Serialize};
 
@@ -168,32 +169,42 @@ impl Sink for MeilisearchSink {
                 .push(doc);
         }
 
-        // Index documents to each target index.
-        for (index_name, documents) in index_documents {
-            let index = self.client.index(&index_name);
+        // Index documents to all target indexes concurrently.
+        let futures: Vec<_> = index_documents
+            .into_iter()
+            .map(|(index_name, documents)| {
+                let client = self.client.clone();
+                async move {
+                    let index = client.index(&index_name);
 
-            let task = index
-                .add_documents(&documents, Some("id"))
-                .await
-                .map_err(|e| {
-                    etl::etl_error!(
-                        etl::error::ErrorKind::DestinationError,
-                        "Failed to add documents to Meilisearch",
-                        e.to_string()
-                    )
-                })?;
+                    let task = index
+                        .add_documents(&documents, Some("id"))
+                        .await
+                        .map_err(|e| {
+                            etl::etl_error!(
+                                etl::error::ErrorKind::DestinationError,
+                                "Failed to add documents to Meilisearch",
+                                e.to_string()
+                            )
+                        })?;
 
-            // Wait for the task to complete.
-            task.wait_for_completion(&self.client, None, None)
-                .await
-                .map_err(|e| {
-                    etl::etl_error!(
-                        etl::error::ErrorKind::DestinationError,
-                        "Failed to wait for Meilisearch task",
-                        e.to_string()
-                    )
-                })?;
-        }
+                    // Wait for the task to complete.
+                    task.wait_for_completion(&client, None, None)
+                        .await
+                        .map_err(|e| {
+                            etl::etl_error!(
+                                etl::error::ErrorKind::DestinationError,
+                                "Failed to wait for Meilisearch task",
+                                e.to_string()
+                            )
+                        })?;
+
+                    Ok::<_, etl::error::EtlError>(())
+                }
+            })
+            .collect();
+
+        try_join_all(futures).await?;
 
         Ok(())
     }
