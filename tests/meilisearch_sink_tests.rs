@@ -13,11 +13,13 @@ use postgres_stream::types::{EventIdentifier, PgLsn, StreamId, TriggeredEvent};
 use uuid::Uuid;
 
 /// Creates a test event with the given payload key.
+/// Includes an `id` field in payload (as users would do via payload_extensions).
 fn make_test_event(key: &str) -> TriggeredEvent {
+    let id = Uuid::new_v4().to_string();
     TriggeredEvent {
-        id: EventIdentifier::new(Uuid::new_v4().to_string(), Utc::now()),
+        id: EventIdentifier::new(id.clone(), Utc::now()),
         stream_id: StreamId::default(),
-        payload: serde_json::json!({ "key": key, "value": "test_data" }),
+        payload: serde_json::json!({ "id": id, "key": key, "value": "test_data" }),
         metadata: Some(serde_json::json!({ "source": "test" })),
         lsn: Some(PgLsn::from(12345u64)),
     }
@@ -109,14 +111,15 @@ async fn test_meilisearch_sink_indexes_only_payload() {
         .expect("Failed to create sink");
 
     // Create event with metadata.
+    // Include `id` in payload (as users would do via payload_extensions).
+    let event_id = Uuid::new_v4().to_string();
     let event = TriggeredEvent {
-        id: EventIdentifier::new(Uuid::new_v4().to_string(), Utc::now()),
+        id: EventIdentifier::new(event_id.clone(), Utc::now()),
         stream_id: StreamId::default(),
-        payload: serde_json::json!({ "action": "created", "user_id": 456 }),
+        payload: serde_json::json!({ "id": event_id, "action": "created", "user_id": 456 }),
         metadata: Some(serde_json::json!({ "source": "api" })),
         lsn: Some(PgLsn::from(99999u64)),
     };
-    let event_id = event.id.id.clone();
 
     sink.publish_events(vec![event])
         .await
@@ -131,10 +134,10 @@ async fn test_meilisearch_sink_indexes_only_payload() {
         .await
         .expect("Failed to get document");
 
-    // Only payload fields + injected id should be present.
+    // Only payload fields should be present (id from payload, not injected).
     assert_eq!(doc["action"], "created");
     assert_eq!(doc["user_id"], 456);
-    assert_eq!(doc["id"], event_id); // Injected for primary key.
+    assert_eq!(doc["id"], event_id); // From payload, not injected.
     // No envelope fields.
     assert!(doc.get("created_at").is_none());
     assert!(doc.get("metadata").is_none());
@@ -206,14 +209,15 @@ async fn test_meilisearch_sink_uses_index_from_metadata() {
         .expect("Failed to create sink");
 
     // Create event with index in metadata.
+    // Include `id` in payload (as users would do via payload_extensions).
+    let event_id = Uuid::new_v4().to_string();
     let event = TriggeredEvent {
-        id: EventIdentifier::new(Uuid::new_v4().to_string(), Utc::now()),
+        id: EventIdentifier::new(event_id.clone(), Utc::now()),
         stream_id: StreamId::default(),
-        payload: serde_json::json!({ "routed": true }),
+        payload: serde_json::json!({ "id": event_id, "routed": true }),
         metadata: Some(serde_json::json!({ "index": metadata_index })),
         lsn: None,
     };
-    let event_id = event.id.id.clone();
 
     sink.publish_events(vec![event])
         .await
