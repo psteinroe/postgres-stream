@@ -125,8 +125,8 @@ impl Sink for RedisStringsSink {
         // Use pipeline for batch efficiency.
         let mut pipe = redis::pipe();
 
-        for event in &events {
-            let key = self.resolve_key(event);
+        for event in events {
+            let key = self.resolve_key(&event);
             pipe.set(&key, event.payload.to_string());
         }
 
