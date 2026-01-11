@@ -9,7 +9,7 @@
 //!
 //! ```sql
 //! -- Via metadata_extensions (dynamic per-event)
-//! metadata_extensions = '[{"key": "index", "source": "record", "value": "index_name"}]'
+//! metadata_extensions = '[{"json_path": "index", "expression": "new.index_name"}]'
 //!
 //! -- Via static metadata
 //! metadata = '{"index": "events"}'
