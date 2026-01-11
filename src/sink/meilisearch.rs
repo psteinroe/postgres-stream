@@ -146,8 +146,8 @@ impl Sink for MeilisearchSink {
         // Group events by target index (supports per-event routing).
         let mut index_documents: HashMap<String, Vec<serde_json::Value>> = HashMap::new();
 
-        for event in &events {
-            let index_name = self.resolve_index(event).ok_or_else(|| {
+        for event in events {
+            let index_name = self.resolve_index(&event).ok_or_else(|| {
                 etl::etl_error!(
                     etl::error::ErrorKind::ConfigError,
                     "No index in config or event metadata"
@@ -157,7 +157,7 @@ impl Sink for MeilisearchSink {
             index_documents
                 .entry(index_name.to_string())
                 .or_default()
-                .push(event.payload.clone());
+                .push(event.payload);
         }
 
         // Index documents to all target indexes concurrently.
