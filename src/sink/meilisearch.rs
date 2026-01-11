@@ -176,8 +176,9 @@ impl Sink for MeilisearchSink {
                         )
                     })?;
 
-                    // Wait for the task to complete.
-                    task.wait_for_completion(&client, None, None)
+                    // Wait for the task to complete and check status.
+                    let completed_task = task
+                        .wait_for_completion(&client, None, None)
                         .await
                         .map_err(|e| {
                             etl::etl_error!(
@@ -186,6 +187,16 @@ impl Sink for MeilisearchSink {
                                 e.to_string()
                             )
                         })?;
+
+                    // Check if task failed.
+                    if completed_task.is_failure() {
+                        let error = completed_task.unwrap_failure();
+                        return Err(etl::etl_error!(
+                            etl::error::ErrorKind::DestinationError,
+                            "Meilisearch task failed",
+                            error.error_message
+                        ));
+                    }
 
                     Ok::<_, etl::error::EtlError>(())
                 }

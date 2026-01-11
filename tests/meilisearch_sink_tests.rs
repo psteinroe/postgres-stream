@@ -116,7 +116,7 @@ async fn test_meilisearch_sink_indexes_only_payload() {
     let event = TriggeredEvent {
         id: EventIdentifier::new(event_id.clone(), Utc::now()),
         stream_id: StreamId::default(),
-        payload: serde_json::json!({ "id": event_id, "action": "created", "user_id": 456 }),
+        payload: serde_json::json!({ "id": event_id, "action": "created", "user": 456 }),
         metadata: Some(serde_json::json!({ "source": "api" })),
         lsn: Some(PgLsn::from(99999u64)),
     };
@@ -125,7 +125,7 @@ async fn test_meilisearch_sink_indexes_only_payload() {
         .await
         .expect("Failed to publish");
 
-    // Retrieve document.
+    // Retrieve document (with retry for eventual consistency).
     let client = create_test_client(port);
     let index = client.index(&index_name);
 
@@ -136,7 +136,7 @@ async fn test_meilisearch_sink_indexes_only_payload() {
 
     // Only payload fields should be present (id from payload, not injected).
     assert_eq!(doc["action"], "created");
-    assert_eq!(doc["user_id"], 456);
+    assert_eq!(doc["user"], 456);
     assert_eq!(doc["id"], event_id); // From payload, not injected.
     // No envelope fields.
     assert!(doc.get("created_at").is_none());
