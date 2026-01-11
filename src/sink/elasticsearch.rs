@@ -143,9 +143,9 @@ impl Sink for ElasticsearchSink {
         let mut operations: Vec<BulkOperation<serde_json::Value>> =
             Vec::with_capacity(events.len());
 
-        for event in &events {
+        for event in events {
             // Resolve target index for this event.
-            let index = self.resolve_index(event).ok_or_else(|| {
+            let index = self.resolve_index(&event).ok_or_else(|| {
                 etl::etl_error!(
                     etl::error::ErrorKind::ConfigError,
                     "No index in config or event metadata"
@@ -153,8 +153,8 @@ impl Sink for ElasticsearchSink {
             })?;
 
             // Index only the payload (not full event envelope).
-            let op = BulkOperation::index(event.payload.clone())
-                .id(&event.id.id)
+            let op = BulkOperation::index(event.payload)
+                .id(event.id.id)
                 .index(index)
                 .into();
             operations.push(op);
