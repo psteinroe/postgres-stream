@@ -9,7 +9,7 @@
 //!
 //! ```sql
 //! -- Via metadata_extensions (dynamic per-event)
-//! metadata_extensions = '[{"key": "index", "source": "record", "value": "index_name"}]'
+//! metadata_extensions = '[{"json_path": "index", "expression": "new.index_name"}]'
 //!
 //! -- Via static metadata
 //! metadata = '{"index": "products"}'
@@ -17,8 +17,11 @@
 //!
 //! Priority: event.metadata["index"] > config.index
 //!
-//! Note: The event ID is automatically injected as the "id" field in each document
-//! for Meilisearch's primary key requirement.
+//! # Primary Key
+//!
+//! Meilisearch requires each document to have a primary key. Configure the primary
+//! key field name in your Meilisearch index settings, or use `payload_extensions`
+//! to add/transform the primary key field before sending.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -151,22 +154,10 @@ impl Sink for MeilisearchSink {
                 )
             })?;
 
-            // Clone payload and inject the event ID as primary key.
-            let mut doc = event.payload.clone();
-            if let Some(obj) = doc.as_object_mut() {
-                obj.insert("id".to_string(), serde_json::json!(event.id.id));
-            } else {
-                // Wrap non-object payloads.
-                doc = serde_json::json!({
-                    "id": event.id.id,
-                    "value": doc
-                });
-            }
-
             index_documents
                 .entry(index_name.to_string())
                 .or_default()
-                .push(doc);
+                .push(event.payload.clone());
         }
 
         // Index documents to all target indexes concurrently.
@@ -177,16 +168,13 @@ impl Sink for MeilisearchSink {
                 async move {
                     let index = client.index(&index_name);
 
-                    let task = index
-                        .add_documents(&documents, Some("id"))
-                        .await
-                        .map_err(|e| {
-                            etl::etl_error!(
-                                etl::error::ErrorKind::DestinationError,
-                                "Failed to add documents to Meilisearch",
-                                e.to_string()
-                            )
-                        })?;
+                    let task = index.add_documents(&documents, None).await.map_err(|e| {
+                        etl::etl_error!(
+                            etl::error::ErrorKind::DestinationError,
+                            "Failed to add documents to Meilisearch",
+                            e.to_string()
+                        )
+                    })?;
 
                     // Wait for the task to complete.
                     task.wait_for_completion(&client, None, None)
