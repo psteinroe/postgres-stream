@@ -127,15 +127,7 @@ impl Sink for RedisStringsSink {
 
         for event in &events {
             let key = self.resolve_key(event);
-            let value = serde_json::to_string(&event.payload).map_err(|e| {
-                etl::etl_error!(
-                    etl::error::ErrorKind::InvalidData,
-                    "Failed to serialize payload to JSON",
-                    e.to_string()
-                )
-            })?;
-
-            pipe.set(&key, value);
+            pipe.set(&key, event.payload.to_string());
         }
 
         pipe.query_async::<()>(&mut *conn).await.map_err(|e| {
