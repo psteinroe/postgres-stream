@@ -161,49 +161,45 @@ impl Sink for MeilisearchSink {
         }
 
         // Index documents to all target indexes concurrently.
-        let futures: Vec<_> = index_documents
-            .into_iter()
-            .map(|(index_name, documents)| {
-                let client = self.client.clone();
-                async move {
-                    let index = client.index(&index_name);
+        try_join_all(index_documents.into_iter().map(|(index_name, documents)| {
+            let client = self.client.clone();
+            async move {
+                let index = client.index(&index_name);
 
-                    let task = index.add_documents(&documents, None).await.map_err(|e| {
+                let task = index.add_documents(&documents, None).await.map_err(|e| {
+                    etl::etl_error!(
+                        etl::error::ErrorKind::DestinationError,
+                        "Failed to add documents to Meilisearch",
+                        e.to_string()
+                    )
+                })?;
+
+                // Wait for the task to complete and check status.
+                let completed_task = task
+                    .wait_for_completion(&client, None, None)
+                    .await
+                    .map_err(|e| {
                         etl::etl_error!(
                             etl::error::ErrorKind::DestinationError,
-                            "Failed to add documents to Meilisearch",
+                            "Failed to wait for Meilisearch task",
                             e.to_string()
                         )
                     })?;
 
-                    // Wait for the task to complete and check status.
-                    let completed_task = task
-                        .wait_for_completion(&client, None, None)
-                        .await
-                        .map_err(|e| {
-                            etl::etl_error!(
-                                etl::error::ErrorKind::DestinationError,
-                                "Failed to wait for Meilisearch task",
-                                e.to_string()
-                            )
-                        })?;
-
-                    // Check if task failed.
-                    if completed_task.is_failure() {
-                        let error = completed_task.unwrap_failure();
-                        return Err(etl::etl_error!(
-                            etl::error::ErrorKind::DestinationError,
-                            "Meilisearch task failed",
-                            error.error_message
-                        ));
-                    }
-
-                    Ok::<_, etl::error::EtlError>(())
+                // Check if task failed.
+                if completed_task.is_failure() {
+                    let error = completed_task.unwrap_failure();
+                    return Err(etl::etl_error!(
+                        etl::error::ErrorKind::DestinationError,
+                        "Meilisearch task failed",
+                        error.error_message
+                    ));
                 }
-            })
-            .collect();
 
-        try_join_all(futures).await?;
+                Ok::<_, etl::error::EtlError>(())
+            }
+        }))
+        .await?;
 
         Ok(())
     }
