@@ -1,6 +1,12 @@
-# Postgres Stream
+<p align="center">
+  <img src="media/logo.png" alt="Postgres Stream" width="300">
+</p>
 
-Reliably stream Postgres table changes to external systems with automatic failover and zero event loss.
+<h1 align="center">Postgres Stream</h1>
+
+<p align="center">
+  Reliably stream Postgres table changes to external systems with automatic failover and zero event loss.
+</p>
 
 ## What is Postgres Stream?
 

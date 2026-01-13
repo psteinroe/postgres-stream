@@ -1,5 +1,6 @@
 [project]
 site_name = "Postgres Stream"
+logo = "media/logo.png"
 site_url = "https://psteinroe.github.io/postgres-stream/"
 site_description = "Reliably stream Postgres table changes to external systems with automatic failover and zero event loss"
 
