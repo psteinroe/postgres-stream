@@ -31,6 +31,9 @@ pub mod sns;
 #[cfg(feature = "sink-kinesis")]
 pub mod kinesis;
 
+#[cfg(feature = "sink-meilisearch")]
+pub mod meilisearch;
+
 #[cfg(feature = "sink-gcp-pubsub")]
 pub mod gcp_pubsub;
 
@@ -68,6 +71,9 @@ use sns::SnsSink;
 
 #[cfg(feature = "sink-kinesis")]
 use kinesis::KinesisSink;
+
+#[cfg(feature = "sink-meilisearch")]
+use meilisearch::MeilisearchSink;
 
 #[cfg(feature = "sink-gcp-pubsub")]
 use gcp_pubsub::GcpPubsubSink;
@@ -123,6 +129,10 @@ pub enum AnySink {
     #[cfg(feature = "sink-kinesis")]
     Kinesis(KinesisSink),
 
+    /// Meilisearch sink for document indexing.
+    #[cfg(feature = "sink-meilisearch")]
+    Meilisearch(MeilisearchSink),
+
     /// GCP Pub/Sub sink for topic publishing.
     #[cfg(feature = "sink-gcp-pubsub")]
     GcpPubsub(GcpPubsubSink),
@@ -166,6 +176,9 @@ impl Sink for AnySink {
 
             #[cfg(feature = "sink-kinesis")]
             AnySink::Kinesis(sink) => sink.publish_events(events).await,
+
+            #[cfg(feature = "sink-meilisearch")]
+            AnySink::Meilisearch(sink) => sink.publish_events(events).await,
 
             #[cfg(feature = "sink-gcp-pubsub")]
             AnySink::GcpPubsub(sink) => sink.publish_events(events).await,

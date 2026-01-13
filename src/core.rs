@@ -208,6 +208,19 @@ async fn run_pipeline(config: &PipelineConfig) -> EtlResult<()> {
             AnySink::Kinesis(s)
         }
 
+        #[cfg(feature = "sink-meilisearch")]
+        SinkConfig::Meilisearch(cfg) => {
+            use crate::sink::meilisearch::MeilisearchSink;
+            let s = MeilisearchSink::new(cfg.clone()).await.map_err(|e| {
+                etl::etl_error!(
+                    etl::error::ErrorKind::InvalidData,
+                    "Failed to create Meilisearch sink",
+                    e.to_string()
+                )
+            })?;
+            AnySink::Meilisearch(s)
+        }
+
         #[cfg(feature = "sink-gcp-pubsub")]
         SinkConfig::GcpPubsub(cfg) => {
             use crate::sink::gcp_pubsub::GcpPubsubSink;
@@ -314,6 +327,11 @@ fn log_sink_config(config: &SinkConfig) {
         #[cfg(feature = "sink-kinesis")]
         SinkConfig::Kinesis(_cfg) => {
             debug!("using kinesis sink");
+        }
+
+        #[cfg(feature = "sink-meilisearch")]
+        SinkConfig::Meilisearch(_cfg) => {
+            debug!("using meilisearch sink");
         }
 
         #[cfg(feature = "sink-gcp-pubsub")]
