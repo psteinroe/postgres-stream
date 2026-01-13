@@ -2,6 +2,7 @@ use ctor::dtor;
 use etl::config::{PgConnectionConfig, TlsConfig};
 use std::sync::{Mutex, OnceLock};
 use testcontainers::{ContainerRequest, ImageExt, runners::SyncRunner};
+use testcontainers_modules::elastic_search::ElasticSearch;
 use testcontainers_modules::elasticmq::ElasticMq;
 use testcontainers_modules::google_cloud_sdk_emulators::CloudSdk;
 use testcontainers_modules::kafka::Kafka;
@@ -18,6 +19,7 @@ static NATS_PORT: OnceLock<u16> = OnceLock::new();
 static RABBITMQ_PORT: OnceLock<u16> = OnceLock::new();
 static KAFKA_PORT: OnceLock<u16> = OnceLock::new();
 static ELASTICMQ_PORT: OnceLock<u16> = OnceLock::new();
+static ELASTICSEARCH_PORT: OnceLock<u16> = OnceLock::new();
 static LOCALSTACK_PORT: OnceLock<u16> = OnceLock::new();
 static PUBSUB_PORT: OnceLock<u16> = OnceLock::new();
 
@@ -30,6 +32,8 @@ static RABBITMQ_CONTAINER: OnceLock<Mutex<Option<testcontainers::Container<Rabbi
     OnceLock::new();
 static KAFKA_CONTAINER: OnceLock<Mutex<Option<testcontainers::Container<Kafka>>>> = OnceLock::new();
 static ELASTICMQ_CONTAINER: OnceLock<Mutex<Option<testcontainers::Container<ElasticMq>>>> =
+    OnceLock::new();
+static ELASTICSEARCH_CONTAINER: OnceLock<Mutex<Option<testcontainers::Container<ElasticSearch>>>> =
     OnceLock::new();
 static LOCALSTACK_CONTAINER: OnceLock<Mutex<Option<testcontainers::Container<LocalStack>>>> =
     OnceLock::new();
@@ -100,6 +104,18 @@ fn cleanup_kafka_container() {
 #[dtor]
 fn cleanup_elasticmq_container() {
     if let Some(mutex) = ELASTICMQ_CONTAINER.get() {
+        if let Ok(mut guard) = mutex.lock() {
+            if let Some(container) = guard.take() {
+                let _ = container.rm();
+            }
+        }
+    }
+}
+
+/// Cleanup function that runs at program exit to stop and remove the Elasticsearch container.
+#[dtor]
+fn cleanup_elasticsearch_container() {
+    if let Some(mutex) = ELASTICSEARCH_CONTAINER.get() {
         if let Ok(mut guard) = mutex.lock() {
             if let Some(container) = guard.take() {
                 let _ = container.rm();
@@ -300,6 +316,31 @@ pub async fn ensure_elasticmq() -> u16 {
         })
         .join()
         .expect("Failed to join elasticmq container startup thread")
+    })
+}
+
+/// Ensures an Elasticsearch container is running and returns its port.
+///
+/// Uses singleton pattern to reuse the same container across tests.
+pub async fn ensure_elasticsearch() -> u16 {
+    *ELASTICSEARCH_PORT.get_or_init(|| {
+        std::thread::spawn(|| {
+            let container: ContainerRequest<ElasticSearch> = ElasticSearch::default().into();
+
+            let container = container
+                .start()
+                .expect("Failed to start elasticsearch container");
+
+            let port = container
+                .get_host_port_ipv4(9200)
+                .expect("Failed to get elasticsearch container port");
+
+            let _ = ELASTICSEARCH_CONTAINER.set(Mutex::new(Some(container)));
+
+            port
+        })
+        .join()
+        .expect("Failed to join elasticsearch container startup thread")
     })
 }
 

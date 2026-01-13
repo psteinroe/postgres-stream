@@ -5,6 +5,7 @@ version = "0.1.0"
 
 [features]
 default            = []
+sink-elasticsearch = ["dep:elasticsearch", "dep:url"]
 sink-gcp-pubsub    = ["dep:google-cloud-pubsub", "dep:google-cloud-auth", "dep:google-cloud-googleapis"]
 sink-kafka         = ["dep:rdkafka"]
 sink-kinesis       = ["dep:aws-sdk-kinesis", "dep:aws-config"]
@@ -62,6 +63,7 @@ aws-config = { version = "1.5", optional = true }
 aws-sdk-kinesis = { version = "1.60", optional = true }
 aws-sdk-sns = { version = "1.60", optional = true }
 aws-sdk-sqs = { version = "1.60", optional = true }
+elasticsearch = { version = "8.19.0-alpha.1", optional = true, default-features = false, features = ["rustls-tls"] }
 google-cloud-auth = { version = "0.18", optional = true }
 google-cloud-googleapis = { version = "0.15", optional = true }
 google-cloud-pubsub = { version = "0.29", optional = true }
@@ -73,6 +75,7 @@ redis = { version = "0.27", default-features = false, features = [
   "streams",
 ], optional = true }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"], optional = true }
+url = { version = "2.5", optional = true, default-features = false }
 
 [target.'cfg(not(target_env = "msvc"))'.dependencies]
 tikv-jemalloc-ctl = { version = "0.6.0", default-features = false, features = ["stats"] }
@@ -91,6 +94,7 @@ testcontainers-modules = { version = "0.11", optional = true, features = [
   "rabbitmq",
   "kafka",
   "elasticmq",
+  "elastic_search",
   "localstack",
   "google_cloud_sdk_emulators",
   "blocking",

@@ -1,6 +1,9 @@
 mod base;
 pub mod memory;
 
+#[cfg(feature = "sink-elasticsearch")]
+pub mod elasticsearch;
+
 #[cfg(feature = "sink-nats")]
 pub mod nats;
 
@@ -35,6 +38,9 @@ pub use base::Sink;
 
 use etl::error::EtlResult;
 use memory::MemorySink;
+
+#[cfg(feature = "sink-elasticsearch")]
+use elasticsearch::ElasticsearchSink;
 
 #[cfg(feature = "sink-nats")]
 use nats::NatsSink;
@@ -76,6 +82,10 @@ use crate::types::TriggeredEvent;
 pub enum AnySink {
     /// In-memory sink for testing and development.
     Memory(MemorySink),
+
+    /// Elasticsearch sink for document indexing.
+    #[cfg(feature = "sink-elasticsearch")]
+    Elasticsearch(ElasticsearchSink),
 
     /// Redis strings sink for key-value storage.
     #[cfg(feature = "sink-redis-strings")]
@@ -126,6 +136,9 @@ impl Sink for AnySink {
     async fn publish_events(&self, events: Vec<TriggeredEvent>) -> EtlResult<()> {
         match self {
             AnySink::Memory(sink) => sink.publish_events(events).await,
+
+            #[cfg(feature = "sink-elasticsearch")]
+            AnySink::Elasticsearch(sink) => sink.publish_events(events).await,
 
             #[cfg(feature = "sink-redis-strings")]
             AnySink::RedisStrings(sink) => sink.publish_events(events).await,
