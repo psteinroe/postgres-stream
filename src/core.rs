@@ -155,6 +155,19 @@ async fn run_pipeline(config: &PipelineConfig) -> EtlResult<()> {
             })?;
             AnySink::Kafka(s)
         }
+
+        #[cfg(feature = "sink-sqs")]
+        SinkConfig::Sqs(cfg) => {
+            use crate::sink::sqs::SqsSink;
+            let s = SqsSink::new(cfg.clone()).await.map_err(|e| {
+                etl::etl_error!(
+                    etl::error::ErrorKind::InvalidData,
+                    "Failed to create SQS sink",
+                    e.to_string()
+                )
+            })?;
+            AnySink::Sqs(s)
+        }
     };
 
     // Create PgStream as an ETL destination
@@ -229,6 +242,11 @@ fn log_sink_config(config: &SinkConfig) {
         #[cfg(feature = "sink-kafka")]
         SinkConfig::Kafka(_cfg) => {
             debug!("using kafka sink");
+        }
+
+        #[cfg(feature = "sink-sqs")]
+        SinkConfig::Sqs(_cfg) => {
+            debug!("using sqs sink");
         }
     }
 }
