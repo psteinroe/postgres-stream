@@ -8,7 +8,7 @@ use postgres_stream::test_utils::ensure_kafka;
 use postgres_stream::types::{EventIdentifier, StreamId, TriggeredEvent};
 
 use chrono::Utc;
-use futures_util::StreamExt;
+use futures::StreamExt;
 use rdkafka::Message;
 use rdkafka::config::ClientConfig;
 use rdkafka::consumer::{Consumer, StreamConsumer};
