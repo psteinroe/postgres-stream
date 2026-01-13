@@ -1,6 +1,9 @@
 mod base;
 pub mod memory;
 
+#[cfg(feature = "sink-nats")]
+pub mod nats;
+
 #[cfg(feature = "sink-redis-strings")]
 pub mod redis_strings;
 
@@ -11,6 +14,9 @@ pub use base::Sink;
 
 use etl::error::EtlResult;
 use memory::MemorySink;
+
+#[cfg(feature = "sink-nats")]
+use nats::NatsSink;
 
 #[cfg(feature = "sink-redis-strings")]
 use redis_strings::RedisStringsSink;
@@ -36,6 +42,10 @@ pub enum AnySink {
     /// Redis streams sink for append-only log storage.
     #[cfg(feature = "sink-redis-streams")]
     RedisStreams(RedisStreamsSink),
+
+    /// NATS sink for pub/sub messaging.
+    #[cfg(feature = "sink-nats")]
+    Nats(NatsSink),
 }
 
 impl Sink for AnySink {
@@ -52,6 +62,9 @@ impl Sink for AnySink {
 
             #[cfg(feature = "sink-redis-streams")]
             AnySink::RedisStreams(sink) => sink.publish_events(events).await,
+
+            #[cfg(feature = "sink-nats")]
+            AnySink::Nats(sink) => sink.publish_events(events).await,
         }
     }
 }

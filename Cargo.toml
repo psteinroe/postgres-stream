@@ -5,6 +5,7 @@ version = "0.1.0"
 
 [features]
 default            = []
+sink-nats          = ["dep:async-nats"]
 sink-redis-streams = ["dep:redis"]
 sink-redis-strings = ["dep:redis"]
 test-utils         = ["dep:ctor", "dep:testcontainers", "dep:testcontainers-modules"]
@@ -49,6 +50,7 @@ etl-postgres = { git = "https://github.com/supabase/etl", rev = "dd2987a55efc16a
 uuid         = { version = "1.19.0", default-features = false, features = ["v4"] }
 
 # Optional sink dependencies.
+async-nats = { version = "0.38", optional = true }
 redis = { version = "0.27", default-features = false, features = [
   "tokio-comp",
   "connection-manager",
@@ -65,7 +67,7 @@ tikv-jemallocator = { version = "0.6.1", default-features = false, features = [
 
 ctor                   = { version = "0.4", optional = true }
 testcontainers         = { version = "0.23", optional = true, features = ["blocking"] }
-testcontainers-modules = { version = "0.11", optional = true, features = ["postgres", "redis", "blocking"] }
+testcontainers-modules = { version = "0.11", optional = true, features = ["postgres", "redis", "nats", "blocking"] }
 
 [dev-dependencies]
 temp-env = "0.3"
