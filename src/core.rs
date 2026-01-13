@@ -181,6 +181,19 @@ async fn run_pipeline(config: &PipelineConfig) -> EtlResult<()> {
             })?;
             AnySink::Sns(s)
         }
+
+        #[cfg(feature = "sink-kinesis")]
+        SinkConfig::Kinesis(cfg) => {
+            use crate::sink::kinesis::KinesisSink;
+            let s = KinesisSink::new(cfg.clone()).await.map_err(|e| {
+                etl::etl_error!(
+                    etl::error::ErrorKind::InvalidData,
+                    "Failed to create Kinesis sink",
+                    e.to_string()
+                )
+            })?;
+            AnySink::Kinesis(s)
+        }
     };
 
     // Create PgStream as an ETL destination
@@ -265,6 +278,11 @@ fn log_sink_config(config: &SinkConfig) {
         #[cfg(feature = "sink-sns")]
         SinkConfig::Sns(_cfg) => {
             debug!("using sns sink");
+        }
+
+        #[cfg(feature = "sink-kinesis")]
+        SinkConfig::Kinesis(_cfg) => {
+            debug!("using kinesis sink");
         }
     }
 }
