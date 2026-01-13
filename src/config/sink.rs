@@ -9,6 +9,9 @@ use crate::sink::redis_strings::RedisStringsSinkConfig;
 #[cfg(feature = "sink-redis-streams")]
 use crate::sink::redis_streams::RedisStreamsSinkConfig;
 
+#[cfg(feature = "sink-rabbitmq")]
+use crate::sink::rabbitmq::RabbitmqSinkConfig;
+
 #[cfg(feature = "sink-webhook")]
 use crate::sink::webhook::WebhookSinkConfig;
 
@@ -35,6 +38,11 @@ pub enum SinkConfig {
     #[cfg(feature = "sink-nats")]
     #[serde(rename = "nats")]
     Nats(NatsSinkConfig),
+
+    /// RabbitMQ sink for AMQP messaging.
+    #[cfg(feature = "sink-rabbitmq")]
+    #[serde(rename = "rabbitmq")]
+    Rabbitmq(RabbitmqSinkConfig),
 
     /// Webhook sink for HTTP POST delivery.
     #[cfg(feature = "sink-webhook")]

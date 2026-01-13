@@ -10,6 +10,9 @@ pub mod redis_strings;
 #[cfg(feature = "sink-redis-streams")]
 pub mod redis_streams;
 
+#[cfg(feature = "sink-rabbitmq")]
+pub mod rabbitmq;
+
 #[cfg(feature = "sink-webhook")]
 pub mod webhook;
 
@@ -26,6 +29,9 @@ use redis_strings::RedisStringsSink;
 
 #[cfg(feature = "sink-redis-streams")]
 use redis_streams::RedisStreamsSink;
+
+#[cfg(feature = "sink-rabbitmq")]
+use rabbitmq::RabbitmqSink;
 
 #[cfg(feature = "sink-webhook")]
 use webhook::WebhookSink;
@@ -53,6 +59,10 @@ pub enum AnySink {
     #[cfg(feature = "sink-nats")]
     Nats(NatsSink),
 
+    /// RabbitMQ sink for AMQP messaging.
+    #[cfg(feature = "sink-rabbitmq")]
+    Rabbitmq(RabbitmqSink),
+
     /// Webhook sink for HTTP POST delivery.
     #[cfg(feature = "sink-webhook")]
     Webhook(WebhookSink),
@@ -75,6 +85,9 @@ impl Sink for AnySink {
 
             #[cfg(feature = "sink-nats")]
             AnySink::Nats(sink) => sink.publish_events(events).await,
+
+            #[cfg(feature = "sink-rabbitmq")]
+            AnySink::Rabbitmq(sink) => sink.publish_events(events).await,
 
             #[cfg(feature = "sink-webhook")]
             AnySink::Webhook(sink) => sink.publish_events(events).await,

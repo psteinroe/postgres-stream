@@ -117,6 +117,19 @@ async fn run_pipeline(config: &PipelineConfig) -> EtlResult<()> {
             AnySink::Nats(s)
         }
 
+        #[cfg(feature = "sink-rabbitmq")]
+        SinkConfig::Rabbitmq(cfg) => {
+            use crate::sink::rabbitmq::RabbitmqSink;
+            let s = RabbitmqSink::new(cfg.clone()).await.map_err(|e| {
+                etl::etl_error!(
+                    etl::error::ErrorKind::InvalidData,
+                    "Failed to create RabbitMQ sink",
+                    e.to_string()
+                )
+            })?;
+            AnySink::Rabbitmq(s)
+        }
+
         #[cfg(feature = "sink-webhook")]
         SinkConfig::Webhook(cfg) => {
             use crate::sink::webhook::WebhookSink;
@@ -188,6 +201,11 @@ fn log_sink_config(config: &SinkConfig) {
         #[cfg(feature = "sink-nats")]
         SinkConfig::Nats(_cfg) => {
             debug!("using nats sink");
+        }
+
+        #[cfg(feature = "sink-rabbitmq")]
+        SinkConfig::Rabbitmq(_cfg) => {
+            debug!("using rabbitmq sink");
         }
 
         #[cfg(feature = "sink-webhook")]
