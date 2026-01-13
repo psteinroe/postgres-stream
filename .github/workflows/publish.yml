@@ -14,9 +14,12 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  build_and_push:
-    name: Build & Push Docker Image
+  prepare:
+    name: Prepare Release Info
     runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
     steps:
       - name: Get latest release tag
         id: latest_release
@@ -27,9 +30,53 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Extract version from tag
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" == "release" ]; then
+            TAG="${GITHUB_REF#refs/tags/}"
+          else
+            TAG="${{ steps.latest_release.outputs.tag }}"
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=$TAG" >> "$GITHUB_OUTPUT"
+
+  build_sink_images:
+    name: Build ${{ matrix.sink }} Image
+    runs-on: ubuntu-latest
+    needs: prepare
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - sink: elasticsearch
+            feature: sink-elasticsearch
+          - sink: gcp-pubsub
+            feature: sink-gcp-pubsub
+          - sink: kafka
+            feature: sink-kafka
+          - sink: kinesis
+            feature: sink-kinesis
+          - sink: meilisearch
+            feature: sink-meilisearch
+          - sink: nats
+            feature: sink-nats
+          - sink: rabbitmq
+            feature: sink-rabbitmq
+          - sink: redis-streams
+            feature: sink-redis-streams
+          - sink: redis-strings
+            feature: sink-redis-strings
+          - sink: sns
+            feature: sink-sns
+          - sink: sqs
+            feature: sink-sqs
+          - sink: webhook
+            feature: sink-webhook
+    steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event_name == 'release' && github.event.release.tag_name || steps.latest_release.outputs.tag }}
+          ref: ${{ needs.prepare.outputs.tag }}
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -41,39 +88,54 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Extract version from tag
-        id: version
-        run: |
-          if [ "${{ github.event_name }}" == "release" ]; then
-            echo "version=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
-          else
-            echo "version=${{ steps.latest_release.outputs.tag }}" >> "$GITHUB_OUTPUT"
-          fi
-
       - name: Build and push
         uses: docker/build-push-action@v5
         with:
           context: .
           push: true
+          build-args: |
+            FEATURES=${{ matrix.feature }}
           tags: |
-            ghcr.io/${{ github.repository }}:latest
-            ghcr.io/${{ github.repository }}:${{ steps.version.outputs.version }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+            ghcr.io/${{ github.repository }}:${{ matrix.sink }}-latest
+            ghcr.io/${{ github.repository }}:${{ matrix.sink }}-${{ needs.prepare.outputs.version }}
+          cache-from: type=gha,scope=${{ matrix.sink }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.sink }}
 
+  summary:
+    name: Output Summary
+    runs-on: ubuntu-latest
+    needs: [prepare, build_sink_images]
+    steps:
       - name: Output Summary
         run: |
           {
-            echo "# 🚀 Docker Image Published!"
+            echo "# 🚀 Docker Images Published!"
             echo ""
-            echo "## Pull the image"
+            echo "## Available Images"
+            echo ""
+            echo "| Sink | Image |"
+            echo "|------|-------|"
+            echo "| Elasticsearch | \`ghcr.io/${{ github.repository }}:elasticsearch-${{ needs.prepare.outputs.version }}\` |"
+            echo "| GCP Pub/Sub | \`ghcr.io/${{ github.repository }}:gcp-pubsub-${{ needs.prepare.outputs.version }}\` |"
+            echo "| Kafka | \`ghcr.io/${{ github.repository }}:kafka-${{ needs.prepare.outputs.version }}\` |"
+            echo "| Kinesis | \`ghcr.io/${{ github.repository }}:kinesis-${{ needs.prepare.outputs.version }}\` |"
+            echo "| Meilisearch | \`ghcr.io/${{ github.repository }}:meilisearch-${{ needs.prepare.outputs.version }}\` |"
+            echo "| NATS | \`ghcr.io/${{ github.repository }}:nats-${{ needs.prepare.outputs.version }}\` |"
+            echo "| RabbitMQ | \`ghcr.io/${{ github.repository }}:rabbitmq-${{ needs.prepare.outputs.version }}\` |"
+            echo "| Redis Streams | \`ghcr.io/${{ github.repository }}:redis-streams-${{ needs.prepare.outputs.version }}\` |"
+            echo "| Redis Strings | \`ghcr.io/${{ github.repository }}:redis-strings-${{ needs.prepare.outputs.version }}\` |"
+            echo "| SNS | \`ghcr.io/${{ github.repository }}:sns-${{ needs.prepare.outputs.version }}\` |"
+            echo "| SQS | \`ghcr.io/${{ github.repository }}:sqs-${{ needs.prepare.outputs.version }}\` |"
+            echo "| Webhook | \`ghcr.io/${{ github.repository }}:webhook-${{ needs.prepare.outputs.version }}\` |"
+            echo ""
+            echo "## Pull an image"
             echo "\`\`\`bash"
-            echo "docker pull ghcr.io/${{ github.repository }}:${{ steps.version.outputs.version }}"
+            echo "docker pull ghcr.io/${{ github.repository }}:<sink>-${{ needs.prepare.outputs.version }}"
             echo "\`\`\`"
             echo ""
             echo "Or use latest:"
             echo "\`\`\`bash"
-            echo "docker pull ghcr.io/${{ github.repository }}:latest"
+            echo "docker pull ghcr.io/${{ github.repository }}:<sink>-latest"
             echo "\`\`\`"
             echo ""
           } >> "$GITHUB_STEP_SUMMARY"
