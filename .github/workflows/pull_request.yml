@@ -87,6 +87,14 @@ jobs:
         pg: [15, 16, 17]
 
     steps:
+      - name: Free Disk Space
+        uses: jlumbroso/free-disk-space@main
+        with:
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: false
+
       - name: Start PostgreSQL with logical replication
         run: |
           docker run -d \
