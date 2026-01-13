@@ -1,5 +1,8 @@
 use serde::Deserialize;
 
+#[cfg(feature = "sink-elasticsearch")]
+use crate::sink::elasticsearch::ElasticsearchSinkConfig;
+
 #[cfg(feature = "sink-kafka")]
 use crate::sink::kafka::KafkaSinkConfig;
 
@@ -38,6 +41,11 @@ use crate::sink::gcp_pubsub::GcpPubsubSinkConfig;
 pub enum SinkConfig {
     /// In-memory sink for testing and development.
     Memory,
+
+    /// Elasticsearch sink for document indexing.
+    #[cfg(feature = "sink-elasticsearch")]
+    #[serde(rename = "elasticsearch")]
+    Elasticsearch(ElasticsearchSinkConfig),
 
     /// Redis strings sink for key-value storage.
     #[cfg(feature = "sink-redis-strings")]
