@@ -103,6 +103,19 @@ async fn run_pipeline(config: &PipelineConfig) -> EtlResult<()> {
             })?;
             AnySink::RedisStreams(s)
         }
+
+        #[cfg(feature = "sink-nats")]
+        SinkConfig::Nats(cfg) => {
+            use crate::sink::nats::NatsSink;
+            let s = NatsSink::new(cfg.clone()).await.map_err(|e| {
+                etl::etl_error!(
+                    etl::error::ErrorKind::InvalidData,
+                    "Failed to create NATS sink",
+                    e.to_string()
+                )
+            })?;
+            AnySink::Nats(s)
+        }
     };
 
     // Create PgStream as an ETL destination
@@ -157,6 +170,11 @@ fn log_sink_config(config: &SinkConfig) {
         #[cfg(feature = "sink-redis-streams")]
         SinkConfig::RedisStreams(_cfg) => {
             debug!("using redis-streams sink");
+        }
+
+        #[cfg(feature = "sink-nats")]
+        SinkConfig::Nats(_cfg) => {
+            debug!("using nats sink");
         }
     }
 }
