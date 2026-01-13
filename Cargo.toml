@@ -5,6 +5,7 @@ version = "0.1.0"
 
 [features]
 default            = []
+sink-gcp-pubsub    = ["dep:google-cloud-pubsub", "dep:google-cloud-auth", "dep:google-cloud-googleapis"]
 sink-kafka         = ["dep:rdkafka"]
 sink-kinesis       = ["dep:aws-sdk-kinesis", "dep:aws-config"]
 sink-nats          = ["dep:async-nats"]
@@ -61,6 +62,9 @@ aws-config = { version = "1.5", optional = true }
 aws-sdk-kinesis = { version = "1.60", optional = true }
 aws-sdk-sns = { version = "1.60", optional = true }
 aws-sdk-sqs = { version = "1.60", optional = true }
+google-cloud-auth = { version = "0.18", optional = true }
+google-cloud-googleapis = { version = "0.15", optional = true }
+google-cloud-pubsub = { version = "0.29", optional = true }
 lapin = { version = "2.5", optional = true }
 rdkafka = { version = "0.36", optional = true, default-features = false, features = ["tokio", "cmake-build"] }
 redis = { version = "0.27", default-features = false, features = [
@@ -88,6 +92,7 @@ testcontainers-modules = { version = "0.11", optional = true, features = [
   "kafka",
   "elasticmq",
   "localstack",
+  "google_cloud_sdk_emulators",
   "blocking",
 ] }
 

@@ -194,6 +194,19 @@ async fn run_pipeline(config: &PipelineConfig) -> EtlResult<()> {
             })?;
             AnySink::Kinesis(s)
         }
+
+        #[cfg(feature = "sink-gcp-pubsub")]
+        SinkConfig::GcpPubsub(cfg) => {
+            use crate::sink::gcp_pubsub::GcpPubsubSink;
+            let s = GcpPubsubSink::new(cfg.clone()).await.map_err(|e| {
+                etl::etl_error!(
+                    etl::error::ErrorKind::InvalidData,
+                    "Failed to create GCP Pub/Sub sink",
+                    e.to_string()
+                )
+            })?;
+            AnySink::GcpPubsub(s)
+        }
     };
 
     // Create PgStream as an ETL destination
@@ -283,6 +296,11 @@ fn log_sink_config(config: &SinkConfig) {
         #[cfg(feature = "sink-kinesis")]
         SinkConfig::Kinesis(_cfg) => {
             debug!("using kinesis sink");
+        }
+
+        #[cfg(feature = "sink-gcp-pubsub")]
+        SinkConfig::GcpPubsub(_cfg) => {
+            debug!("using gcp-pubsub sink");
         }
     }
 }

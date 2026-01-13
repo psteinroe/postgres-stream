@@ -27,6 +27,9 @@ use crate::sink::sns::SnsSinkConfig;
 #[cfg(feature = "sink-kinesis")]
 use crate::sink::kinesis::KinesisSinkConfig;
 
+#[cfg(feature = "sink-gcp-pubsub")]
+use crate::sink::gcp_pubsub::GcpPubsubSinkConfig;
+
 /// Sink destination configuration.
 ///
 /// Determines where replicated events are sent.
@@ -80,4 +83,9 @@ pub enum SinkConfig {
     #[cfg(feature = "sink-kinesis")]
     #[serde(rename = "kinesis")]
     Kinesis(KinesisSinkConfig),
+
+    /// GCP Pub/Sub sink for topic publishing.
+    #[cfg(feature = "sink-gcp-pubsub")]
+    #[serde(rename = "gcp-pubsub")]
+    GcpPubsub(GcpPubsubSinkConfig),
 }
