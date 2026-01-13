@@ -2,6 +2,7 @@ use ctor::dtor;
 use etl::config::{PgConnectionConfig, TlsConfig};
 use std::sync::{Mutex, OnceLock};
 use testcontainers::{ContainerRequest, ImageExt, runners::SyncRunner};
+use testcontainers_modules::elasticmq::ElasticMq;
 use testcontainers_modules::kafka::Kafka;
 use testcontainers_modules::nats::Nats;
 use testcontainers_modules::postgres::Postgres;
@@ -14,6 +15,7 @@ static REDIS_PORT: OnceLock<u16> = OnceLock::new();
 static NATS_PORT: OnceLock<u16> = OnceLock::new();
 static RABBITMQ_PORT: OnceLock<u16> = OnceLock::new();
 static KAFKA_PORT: OnceLock<u16> = OnceLock::new();
+static ELASTICMQ_PORT: OnceLock<u16> = OnceLock::new();
 
 // Using Mutex<Option<...>> so we can take ownership for cleanup.
 static POSTGRES_CONTAINER: OnceLock<Mutex<Option<testcontainers::Container<Postgres>>>> =
@@ -23,6 +25,8 @@ static NATS_CONTAINER: OnceLock<Mutex<Option<testcontainers::Container<Nats>>>> 
 static RABBITMQ_CONTAINER: OnceLock<Mutex<Option<testcontainers::Container<RabbitMq>>>> =
     OnceLock::new();
 static KAFKA_CONTAINER: OnceLock<Mutex<Option<testcontainers::Container<Kafka>>>> = OnceLock::new();
+static ELASTICMQ_CONTAINER: OnceLock<Mutex<Option<testcontainers::Container<ElasticMq>>>> =
+    OnceLock::new();
 
 /// Cleanup function that runs at program exit to stop and remove the postgres container.
 #[dtor]
@@ -76,6 +80,18 @@ fn cleanup_rabbitmq_container() {
 #[dtor]
 fn cleanup_kafka_container() {
     if let Some(mutex) = KAFKA_CONTAINER.get() {
+        if let Ok(mut guard) = mutex.lock() {
+            if let Some(container) = guard.take() {
+                let _ = container.rm();
+            }
+        }
+    }
+}
+
+/// Cleanup function that runs at program exit to stop and remove the ElasticMQ container.
+#[dtor]
+fn cleanup_elasticmq_container() {
+    if let Some(mutex) = ELASTICMQ_CONTAINER.get() {
         if let Ok(mut guard) = mutex.lock() {
             if let Some(container) = guard.take() {
                 let _ = container.rm();
@@ -227,5 +243,30 @@ pub async fn ensure_kafka() -> u16 {
         })
         .join()
         .expect("Failed to join kafka container startup thread")
+    })
+}
+
+/// Ensures an ElasticMQ container is running and returns its port.
+///
+/// Uses singleton pattern to reuse the same container across tests.
+pub async fn ensure_elasticmq() -> u16 {
+    *ELASTICMQ_PORT.get_or_init(|| {
+        std::thread::spawn(|| {
+            let container: ContainerRequest<ElasticMq> = ElasticMq::default().into();
+
+            let container = container
+                .start()
+                .expect("Failed to start elasticmq container");
+
+            let port = container
+                .get_host_port_ipv4(9324)
+                .expect("Failed to get elasticmq container port");
+
+            let _ = ELASTICMQ_CONTAINER.set(Mutex::new(Some(container)));
+
+            port
+        })
+        .join()
+        .expect("Failed to join elasticmq container startup thread")
     })
 }

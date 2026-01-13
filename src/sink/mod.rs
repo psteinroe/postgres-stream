@@ -19,6 +19,9 @@ pub mod webhook;
 #[cfg(feature = "sink-kafka")]
 pub mod kafka;
 
+#[cfg(feature = "sink-sqs")]
+pub mod sqs;
+
 pub use base::Sink;
 
 use etl::error::EtlResult;
@@ -41,6 +44,9 @@ use webhook::WebhookSink;
 
 #[cfg(feature = "sink-kafka")]
 use kafka::KafkaSink;
+
+#[cfg(feature = "sink-sqs")]
+use sqs::SqsSink;
 
 use crate::types::TriggeredEvent;
 
@@ -76,6 +82,10 @@ pub enum AnySink {
     /// Kafka sink for Apache Kafka messaging.
     #[cfg(feature = "sink-kafka")]
     Kafka(KafkaSink),
+
+    /// AWS SQS sink for queue messaging.
+    #[cfg(feature = "sink-sqs")]
+    Sqs(SqsSink),
 }
 
 impl Sink for AnySink {
@@ -104,6 +114,9 @@ impl Sink for AnySink {
 
             #[cfg(feature = "sink-kafka")]
             AnySink::Kafka(sink) => sink.publish_events(events).await,
+
+            #[cfg(feature = "sink-sqs")]
+            AnySink::Sqs(sink) => sink.publish_events(events).await,
         }
     }
 }

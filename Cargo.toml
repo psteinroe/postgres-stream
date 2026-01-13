@@ -10,6 +10,7 @@ sink-nats          = ["dep:async-nats"]
 sink-rabbitmq      = ["dep:lapin"]
 sink-redis-streams = ["dep:redis"]
 sink-redis-strings = ["dep:redis"]
+sink-sqs           = ["dep:aws-sdk-sqs", "dep:aws-config"]
 sink-webhook       = ["dep:reqwest"]
 test-utils         = ["dep:ctor", "dep:testcontainers", "dep:testcontainers-modules"]
 
@@ -54,6 +55,8 @@ uuid         = { version = "1.19.0", default-features = false, features = ["v4"]
 
 # Optional sink dependencies.
 async-nats = { version = "0.38", optional = true }
+aws-config = { version = "1.5", optional = true }
+aws-sdk-sqs = { version = "1.60", optional = true }
 lapin = { version = "2.5", optional = true }
 rdkafka = { version = "0.36", optional = true, default-features = false, features = ["tokio", "cmake-build"] }
 redis = { version = "0.27", default-features = false, features = [
@@ -79,6 +82,7 @@ testcontainers-modules = { version = "0.11", optional = true, features = [
   "nats",
   "rabbitmq",
   "kafka",
+  "elasticmq",
   "blocking",
 ] }
 

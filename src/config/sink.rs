@@ -18,6 +18,9 @@ use crate::sink::rabbitmq::RabbitmqSinkConfig;
 #[cfg(feature = "sink-webhook")]
 use crate::sink::webhook::WebhookSinkConfig;
 
+#[cfg(feature = "sink-sqs")]
+use crate::sink::sqs::SqsSinkConfig;
+
 /// Sink destination configuration.
 ///
 /// Determines where replicated events are sent.
@@ -56,4 +59,9 @@ pub enum SinkConfig {
     #[cfg(feature = "sink-kafka")]
     #[serde(rename = "kafka")]
     Kafka(KafkaSinkConfig),
+
+    /// AWS SQS sink for queue messaging.
+    #[cfg(feature = "sink-sqs")]
+    #[serde(rename = "sqs")]
+    Sqs(SqsSinkConfig),
 }
