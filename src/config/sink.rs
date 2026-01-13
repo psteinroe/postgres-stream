@@ -24,6 +24,9 @@ use crate::sink::sqs::SqsSinkConfig;
 #[cfg(feature = "sink-sns")]
 use crate::sink::sns::SnsSinkConfig;
 
+#[cfg(feature = "sink-kinesis")]
+use crate::sink::kinesis::KinesisSinkConfig;
+
 /// Sink destination configuration.
 ///
 /// Determines where replicated events are sent.
@@ -72,4 +75,9 @@ pub enum SinkConfig {
     #[cfg(feature = "sink-sns")]
     #[serde(rename = "sns")]
     Sns(SnsSinkConfig),
+
+    /// AWS Kinesis sink for data stream publishing.
+    #[cfg(feature = "sink-kinesis")]
+    #[serde(rename = "kinesis")]
+    Kinesis(KinesisSinkConfig),
 }

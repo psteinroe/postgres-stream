@@ -6,6 +6,7 @@ version = "0.1.0"
 [features]
 default            = []
 sink-kafka         = ["dep:rdkafka"]
+sink-kinesis       = ["dep:aws-sdk-kinesis", "dep:aws-config"]
 sink-nats          = ["dep:async-nats"]
 sink-rabbitmq      = ["dep:lapin"]
 sink-redis-streams = ["dep:redis"]
@@ -57,6 +58,7 @@ uuid         = { version = "1.19.0", default-features = false, features = ["v4"]
 # Optional sink dependencies.
 async-nats = { version = "0.38", optional = true }
 aws-config = { version = "1.5", optional = true }
+aws-sdk-kinesis = { version = "1.60", optional = true }
 aws-sdk-sns = { version = "1.60", optional = true }
 aws-sdk-sqs = { version = "1.60", optional = true }
 lapin = { version = "2.5", optional = true }
