@@ -77,6 +77,19 @@ async fn run_pipeline(config: &PipelineConfig) -> EtlResult<()> {
     // Create sink based on configuration.
     let sink = match &config.sink {
         SinkConfig::Memory => AnySink::Memory(MemorySink::new()),
+
+        #[cfg(feature = "sink-redis-strings")]
+        SinkConfig::RedisStrings(cfg) => {
+            use crate::sink::redis_strings::RedisStringsSink;
+            let s = RedisStringsSink::new(cfg.clone()).await.map_err(|e| {
+                etl::etl_error!(
+                    etl::error::ErrorKind::InvalidData,
+                    "Failed to create Redis Strings sink",
+                    e.to_string()
+                )
+            })?;
+            AnySink::RedisStrings(s)
+        }
     };
 
     // Create PgStream as an ETL destination
@@ -121,6 +134,11 @@ fn log_sink_config(config: &SinkConfig) {
     match config {
         SinkConfig::Memory => {
             debug!("using memory sink");
+        }
+
+        #[cfg(feature = "sink-redis-strings")]
+        SinkConfig::RedisStrings(_cfg) => {
+            debug!("using redis-strings sink");
         }
     }
 }
