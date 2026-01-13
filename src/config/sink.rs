@@ -21,6 +21,9 @@ use crate::sink::webhook::WebhookSinkConfig;
 #[cfg(feature = "sink-sqs")]
 use crate::sink::sqs::SqsSinkConfig;
 
+#[cfg(feature = "sink-sns")]
+use crate::sink::sns::SnsSinkConfig;
+
 /// Sink destination configuration.
 ///
 /// Determines where replicated events are sent.
@@ -64,4 +67,9 @@ pub enum SinkConfig {
     #[cfg(feature = "sink-sqs")]
     #[serde(rename = "sqs")]
     Sqs(SqsSinkConfig),
+
+    /// AWS SNS sink for topic publishing.
+    #[cfg(feature = "sink-sns")]
+    #[serde(rename = "sns")]
+    Sns(SnsSinkConfig),
 }

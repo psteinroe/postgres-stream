@@ -168,6 +168,19 @@ async fn run_pipeline(config: &PipelineConfig) -> EtlResult<()> {
             })?;
             AnySink::Sqs(s)
         }
+
+        #[cfg(feature = "sink-sns")]
+        SinkConfig::Sns(cfg) => {
+            use crate::sink::sns::SnsSink;
+            let s = SnsSink::new(cfg.clone()).await.map_err(|e| {
+                etl::etl_error!(
+                    etl::error::ErrorKind::InvalidData,
+                    "Failed to create SNS sink",
+                    e.to_string()
+                )
+            })?;
+            AnySink::Sns(s)
+        }
     };
 
     // Create PgStream as an ETL destination
@@ -247,6 +260,11 @@ fn log_sink_config(config: &SinkConfig) {
         #[cfg(feature = "sink-sqs")]
         SinkConfig::Sqs(_cfg) => {
             debug!("using sqs sink");
+        }
+
+        #[cfg(feature = "sink-sns")]
+        SinkConfig::Sns(_cfg) => {
+            debug!("using sns sink");
         }
     }
 }

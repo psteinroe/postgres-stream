@@ -22,6 +22,9 @@ pub mod kafka;
 #[cfg(feature = "sink-sqs")]
 pub mod sqs;
 
+#[cfg(feature = "sink-sns")]
+pub mod sns;
+
 pub use base::Sink;
 
 use etl::error::EtlResult;
@@ -47,6 +50,9 @@ use kafka::KafkaSink;
 
 #[cfg(feature = "sink-sqs")]
 use sqs::SqsSink;
+
+#[cfg(feature = "sink-sns")]
+use sns::SnsSink;
 
 use crate::types::TriggeredEvent;
 
@@ -86,6 +92,10 @@ pub enum AnySink {
     /// AWS SQS sink for queue messaging.
     #[cfg(feature = "sink-sqs")]
     Sqs(SqsSink),
+
+    /// AWS SNS sink for topic publishing.
+    #[cfg(feature = "sink-sns")]
+    Sns(SnsSink),
 }
 
 impl Sink for AnySink {
@@ -117,6 +127,9 @@ impl Sink for AnySink {
 
             #[cfg(feature = "sink-sqs")]
             AnySink::Sqs(sink) => sink.publish_events(events).await,
+
+            #[cfg(feature = "sink-sns")]
+            AnySink::Sns(sink) => sink.publish_events(events).await,
         }
     }
 }
