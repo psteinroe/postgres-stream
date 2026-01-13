@@ -1,5 +1,8 @@
 use serde::Deserialize;
 
+#[cfg(feature = "sink-kafka")]
+use crate::sink::kafka::KafkaSinkConfig;
+
 #[cfg(feature = "sink-nats")]
 use crate::sink::nats::NatsSinkConfig;
 
@@ -48,4 +51,9 @@ pub enum SinkConfig {
     #[cfg(feature = "sink-webhook")]
     #[serde(rename = "webhook")]
     Webhook(WebhookSinkConfig),
+
+    /// Kafka sink for Apache Kafka messaging.
+    #[cfg(feature = "sink-kafka")]
+    #[serde(rename = "kafka")]
+    Kafka(KafkaSinkConfig),
 }

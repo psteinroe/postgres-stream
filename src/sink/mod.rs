@@ -16,6 +16,9 @@ pub mod rabbitmq;
 #[cfg(feature = "sink-webhook")]
 pub mod webhook;
 
+#[cfg(feature = "sink-kafka")]
+pub mod kafka;
+
 pub use base::Sink;
 
 use etl::error::EtlResult;
@@ -35,6 +38,9 @@ use rabbitmq::RabbitmqSink;
 
 #[cfg(feature = "sink-webhook")]
 use webhook::WebhookSink;
+
+#[cfg(feature = "sink-kafka")]
+use kafka::KafkaSink;
 
 use crate::types::TriggeredEvent;
 
@@ -66,6 +72,10 @@ pub enum AnySink {
     /// Webhook sink for HTTP POST delivery.
     #[cfg(feature = "sink-webhook")]
     Webhook(WebhookSink),
+
+    /// Kafka sink for Apache Kafka messaging.
+    #[cfg(feature = "sink-kafka")]
+    Kafka(KafkaSink),
 }
 
 impl Sink for AnySink {
@@ -91,6 +101,9 @@ impl Sink for AnySink {
 
             #[cfg(feature = "sink-webhook")]
             AnySink::Webhook(sink) => sink.publish_events(events).await,
+
+            #[cfg(feature = "sink-kafka")]
+            AnySink::Kafka(sink) => sink.publish_events(events).await,
         }
     }
 }
