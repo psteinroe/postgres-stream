@@ -3,6 +3,9 @@ use serde::Deserialize;
 #[cfg(feature = "sink-redis-strings")]
 use crate::sink::redis_strings::RedisStringsSinkConfig;
 
+#[cfg(feature = "sink-redis-streams")]
+use crate::sink::redis_streams::RedisStreamsSinkConfig;
+
 /// Sink destination configuration.
 ///
 /// Determines where replicated events are sent.
@@ -16,4 +19,9 @@ pub enum SinkConfig {
     #[cfg(feature = "sink-redis-strings")]
     #[serde(rename = "redis-strings")]
     RedisStrings(RedisStringsSinkConfig),
+
+    /// Redis streams sink for append-only log storage.
+    #[cfg(feature = "sink-redis-streams")]
+    #[serde(rename = "redis-streams")]
+    RedisStreams(RedisStreamsSinkConfig),
 }
