@@ -3,6 +3,7 @@ use etl::config::{PgConnectionConfig, TlsConfig};
 use std::sync::{Mutex, OnceLock};
 use testcontainers::{ContainerRequest, ImageExt, runners::SyncRunner};
 use testcontainers_modules::elasticmq::ElasticMq;
+use testcontainers_modules::google_cloud_sdk_emulators::CloudSdk;
 use testcontainers_modules::kafka::Kafka;
 use testcontainers_modules::localstack::LocalStack;
 use testcontainers_modules::nats::Nats;
@@ -18,6 +19,7 @@ static RABBITMQ_PORT: OnceLock<u16> = OnceLock::new();
 static KAFKA_PORT: OnceLock<u16> = OnceLock::new();
 static ELASTICMQ_PORT: OnceLock<u16> = OnceLock::new();
 static LOCALSTACK_PORT: OnceLock<u16> = OnceLock::new();
+static PUBSUB_PORT: OnceLock<u16> = OnceLock::new();
 
 // Using Mutex<Option<...>> so we can take ownership for cleanup.
 static POSTGRES_CONTAINER: OnceLock<Mutex<Option<testcontainers::Container<Postgres>>>> =
@@ -30,6 +32,8 @@ static KAFKA_CONTAINER: OnceLock<Mutex<Option<testcontainers::Container<Kafka>>>
 static ELASTICMQ_CONTAINER: OnceLock<Mutex<Option<testcontainers::Container<ElasticMq>>>> =
     OnceLock::new();
 static LOCALSTACK_CONTAINER: OnceLock<Mutex<Option<testcontainers::Container<LocalStack>>>> =
+    OnceLock::new();
+static PUBSUB_CONTAINER: OnceLock<Mutex<Option<testcontainers::Container<CloudSdk>>>> =
     OnceLock::new();
 
 /// Cleanup function that runs at program exit to stop and remove the postgres container.
@@ -108,6 +112,18 @@ fn cleanup_elasticmq_container() {
 #[dtor]
 fn cleanup_localstack_container() {
     if let Some(mutex) = LOCALSTACK_CONTAINER.get() {
+        if let Ok(mut guard) = mutex.lock() {
+            if let Some(container) = guard.take() {
+                let _ = container.rm();
+            }
+        }
+    }
+}
+
+/// Cleanup function that runs at program exit to stop and remove the Pub/Sub emulator container.
+#[dtor]
+fn cleanup_pubsub_container() {
+    if let Some(mutex) = PUBSUB_CONTAINER.get() {
         if let Ok(mut guard) = mutex.lock() {
             if let Some(container) = guard.take() {
                 let _ = container.rm();
@@ -309,5 +325,30 @@ pub async fn ensure_localstack() -> u16 {
         })
         .join()
         .expect("Failed to join localstack container startup thread")
+    })
+}
+
+/// Ensures a GCP Pub/Sub emulator container is running and returns its port.
+///
+/// The container is reused across tests. Used for testing GCP Pub/Sub sink.
+pub async fn ensure_pubsub_emulator() -> u16 {
+    *PUBSUB_PORT.get_or_init(|| {
+        std::thread::spawn(|| {
+            let container: ContainerRequest<CloudSdk> = CloudSdk::pubsub().into();
+
+            let container = container
+                .start()
+                .expect("Failed to start Pub/Sub emulator container");
+
+            let port = container
+                .get_host_port_ipv4(8085)
+                .expect("Failed to get Pub/Sub emulator port");
+
+            let _ = PUBSUB_CONTAINER.set(Mutex::new(Some(container)));
+
+            port
+        })
+        .join()
+        .expect("Failed to join container startup thread")
     })
 }

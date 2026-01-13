@@ -28,6 +28,9 @@ pub mod sns;
 #[cfg(feature = "sink-kinesis")]
 pub mod kinesis;
 
+#[cfg(feature = "sink-gcp-pubsub")]
+pub mod gcp_pubsub;
+
 pub use base::Sink;
 
 use etl::error::EtlResult;
@@ -59,6 +62,9 @@ use sns::SnsSink;
 
 #[cfg(feature = "sink-kinesis")]
 use kinesis::KinesisSink;
+
+#[cfg(feature = "sink-gcp-pubsub")]
+use gcp_pubsub::GcpPubsubSink;
 
 use crate::types::TriggeredEvent;
 
@@ -106,6 +112,10 @@ pub enum AnySink {
     /// AWS Kinesis sink for data stream publishing.
     #[cfg(feature = "sink-kinesis")]
     Kinesis(KinesisSink),
+
+    /// GCP Pub/Sub sink for topic publishing.
+    #[cfg(feature = "sink-gcp-pubsub")]
+    GcpPubsub(GcpPubsubSink),
 }
 
 impl Sink for AnySink {
@@ -143,6 +153,9 @@ impl Sink for AnySink {
 
             #[cfg(feature = "sink-kinesis")]
             AnySink::Kinesis(sink) => sink.publish_events(events).await,
+
+            #[cfg(feature = "sink-gcp-pubsub")]
+            AnySink::GcpPubsub(sink) => sink.publish_events(events).await,
         }
     }
 }
