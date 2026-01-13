@@ -4,6 +4,9 @@ pub mod memory;
 #[cfg(feature = "sink-redis-strings")]
 pub mod redis_strings;
 
+#[cfg(feature = "sink-redis-streams")]
+pub mod redis_streams;
+
 pub use base::Sink;
 
 use etl::error::EtlResult;
@@ -11,6 +14,9 @@ use memory::MemorySink;
 
 #[cfg(feature = "sink-redis-strings")]
 use redis_strings::RedisStringsSink;
+
+#[cfg(feature = "sink-redis-streams")]
+use redis_streams::RedisStreamsSink;
 
 use crate::types::TriggeredEvent;
 
@@ -26,6 +32,10 @@ pub enum AnySink {
     /// Redis strings sink for key-value storage.
     #[cfg(feature = "sink-redis-strings")]
     RedisStrings(RedisStringsSink),
+
+    /// Redis streams sink for append-only log storage.
+    #[cfg(feature = "sink-redis-streams")]
+    RedisStreams(RedisStreamsSink),
 }
 
 impl Sink for AnySink {
@@ -39,6 +49,9 @@ impl Sink for AnySink {
 
             #[cfg(feature = "sink-redis-strings")]
             AnySink::RedisStrings(sink) => sink.publish_events(events).await,
+
+            #[cfg(feature = "sink-redis-streams")]
+            AnySink::RedisStreams(sink) => sink.publish_events(events).await,
         }
     }
 }
