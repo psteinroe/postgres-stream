@@ -8,6 +8,7 @@ default            = []
 sink-nats          = ["dep:async-nats"]
 sink-redis-streams = ["dep:redis"]
 sink-redis-strings = ["dep:redis"]
+sink-webhook       = ["dep:reqwest"]
 test-utils         = ["dep:ctor", "dep:testcontainers", "dep:testcontainers-modules"]
 
 [dependencies]
@@ -56,6 +57,7 @@ redis = { version = "0.27", default-features = false, features = [
   "connection-manager",
   "streams",
 ], optional = true }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"], optional = true }
 
 [target.'cfg(not(target_env = "msvc"))'.dependencies]
 tikv-jemalloc-ctl = { version = "0.6.0", default-features = false, features = ["stats"] }
@@ -72,6 +74,7 @@ testcontainers-modules = { version = "0.11", optional = true, features = ["postg
 [dev-dependencies]
 temp-env = "0.3"
 tempfile = "3.13"
+wiremock = "0.6"
 
 [lints.clippy]
 fallible_impl_from        = "deny"

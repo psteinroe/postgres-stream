@@ -9,6 +9,9 @@ use crate::sink::redis_strings::RedisStringsSinkConfig;
 #[cfg(feature = "sink-redis-streams")]
 use crate::sink::redis_streams::RedisStreamsSinkConfig;
 
+#[cfg(feature = "sink-webhook")]
+use crate::sink::webhook::WebhookSinkConfig;
+
 /// Sink destination configuration.
 ///
 /// Determines where replicated events are sent.
@@ -32,4 +35,9 @@ pub enum SinkConfig {
     #[cfg(feature = "sink-nats")]
     #[serde(rename = "nats")]
     Nats(NatsSinkConfig),
+
+    /// Webhook sink for HTTP POST delivery.
+    #[cfg(feature = "sink-webhook")]
+    #[serde(rename = "webhook")]
+    Webhook(WebhookSinkConfig),
 }
