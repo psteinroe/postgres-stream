@@ -6,6 +6,7 @@ version = "0.1.0"
 [features]
 default            = []
 sink-nats          = ["dep:async-nats"]
+sink-rabbitmq      = ["dep:lapin"]
 sink-redis-streams = ["dep:redis"]
 sink-redis-strings = ["dep:redis"]
 sink-webhook       = ["dep:reqwest"]
@@ -52,6 +53,7 @@ uuid         = { version = "1.19.0", default-features = false, features = ["v4"]
 
 # Optional sink dependencies.
 async-nats = { version = "0.38", optional = true }
+lapin = { version = "2.5", optional = true }
 redis = { version = "0.27", default-features = false, features = [
   "tokio-comp",
   "connection-manager",
@@ -67,9 +69,15 @@ tikv-jemallocator = { version = "0.6.1", default-features = false, features = [
 ] }
 
 
-ctor                   = { version = "0.4", optional = true }
-testcontainers         = { version = "0.23", optional = true, features = ["blocking"] }
-testcontainers-modules = { version = "0.11", optional = true, features = ["postgres", "redis", "nats", "blocking"] }
+ctor = { version = "0.4", optional = true }
+testcontainers = { version = "0.23", optional = true, features = ["blocking"] }
+testcontainers-modules = { version = "0.11", optional = true, features = [
+  "postgres",
+  "redis",
+  "nats",
+  "rabbitmq",
+  "blocking",
+] }
 
 [dev-dependencies]
 temp-env = "0.3"
