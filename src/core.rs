@@ -116,6 +116,19 @@ async fn run_pipeline(config: &PipelineConfig) -> EtlResult<()> {
             })?;
             AnySink::Nats(s)
         }
+
+        #[cfg(feature = "sink-webhook")]
+        SinkConfig::Webhook(cfg) => {
+            use crate::sink::webhook::WebhookSink;
+            let s = WebhookSink::new(cfg.clone()).map_err(|e| {
+                etl::etl_error!(
+                    etl::error::ErrorKind::InvalidData,
+                    "Failed to create Webhook sink",
+                    e.to_string()
+                )
+            })?;
+            AnySink::Webhook(s)
+        }
     };
 
     // Create PgStream as an ETL destination
@@ -175,6 +188,11 @@ fn log_sink_config(config: &SinkConfig) {
         #[cfg(feature = "sink-nats")]
         SinkConfig::Nats(_cfg) => {
             debug!("using nats sink");
+        }
+
+        #[cfg(feature = "sink-webhook")]
+        SinkConfig::Webhook(_cfg) => {
+            debug!("using webhook sink");
         }
     }
 }
