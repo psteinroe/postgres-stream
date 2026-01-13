@@ -29,3 +29,7 @@ target
 
 # macOS
 .DS_Store
+
+# Documentation
+site/
+.playwright-mcp/

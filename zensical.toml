@@ -1,0 +1,59 @@
+[project]
+site_name = "Postgres Stream"
+site_url = "https://psteinroe.github.io/postgres-stream/"
+site_description = "Reliably stream Postgres table changes to external systems with automatic failover and zero event loss"
+
+repo_url = "https://github.com/psteinroe/postgres-stream"
+repo_name = "psteinroe/postgres-stream"
+
+nav = [
+  { "Introduction" = "index.md" },
+  { "Getting Started" = [
+    "getting-started/index.md",
+    "getting-started/requirements.md",
+    "getting-started/configuration.md",
+    "getting-started/running.md"
+  ]},
+  { "Concepts" = [
+    "concepts/how-it-works.md",
+    "concepts/subscriptions.md",
+    "concepts/payload-extensions.md",
+    "concepts/event-metadata.md",
+    "concepts/failover.md"
+  ]},
+  { "Sinks" = [
+    "sinks/index.md",
+    "sinks/kafka.md",
+    "sinks/nats.md",
+    "sinks/rabbitmq.md",
+    "sinks/redis-strings.md",
+    "sinks/redis-streams.md",
+    "sinks/webhook.md",
+    "sinks/sqs.md",
+    "sinks/sns.md",
+    "sinks/kinesis.md",
+    "sinks/gcp-pubsub.md",
+    "sinks/elasticsearch.md",
+    "sinks/meilisearch.md"
+  ]},
+  { "Guides" = [
+    "guides/custom-sinks.md",
+    "guides/manual-events.md",
+    "guides/partition-management.md"
+  ]},
+  { "Reference" = [
+    "reference/configuration.md",
+    "reference/subscriptions-table.md",
+    "reference/event-format.md"
+  ]}
+]
+
+[project.theme]
+features = [
+  "navigation.tabs",
+  "navigation.sections",
+  "navigation.expand",
+  "navigation.path",
+  "navigation.indexes",
+  "content.code.copy"
+]
