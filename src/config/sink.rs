@@ -30,6 +30,9 @@ use crate::sink::sns::SnsSinkConfig;
 #[cfg(feature = "sink-kinesis")]
 use crate::sink::kinesis::KinesisSinkConfig;
 
+#[cfg(feature = "sink-meilisearch")]
+use crate::sink::meilisearch::MeilisearchSinkConfig;
+
 #[cfg(feature = "sink-gcp-pubsub")]
 use crate::sink::gcp_pubsub::GcpPubsubSinkConfig;
 
@@ -91,6 +94,11 @@ pub enum SinkConfig {
     #[cfg(feature = "sink-kinesis")]
     #[serde(rename = "kinesis")]
     Kinesis(KinesisSinkConfig),
+
+    /// Meilisearch sink for document indexing.
+    #[cfg(feature = "sink-meilisearch")]
+    #[serde(rename = "meilisearch")]
+    Meilisearch(MeilisearchSinkConfig),
 
     /// GCP Pub/Sub sink for topic publishing.
     #[cfg(feature = "sink-gcp-pubsub")]

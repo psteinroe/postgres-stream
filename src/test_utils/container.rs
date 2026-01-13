@@ -7,6 +7,7 @@ use testcontainers_modules::elasticmq::ElasticMq;
 use testcontainers_modules::google_cloud_sdk_emulators::CloudSdk;
 use testcontainers_modules::kafka::Kafka;
 use testcontainers_modules::localstack::LocalStack;
+use testcontainers_modules::meilisearch::Meilisearch;
 use testcontainers_modules::nats::Nats;
 use testcontainers_modules::postgres::Postgres;
 use testcontainers_modules::rabbitmq::RabbitMq;
@@ -20,6 +21,7 @@ static RABBITMQ_PORT: OnceLock<u16> = OnceLock::new();
 static KAFKA_PORT: OnceLock<u16> = OnceLock::new();
 static ELASTICMQ_PORT: OnceLock<u16> = OnceLock::new();
 static ELASTICSEARCH_PORT: OnceLock<u16> = OnceLock::new();
+static MEILISEARCH_PORT: OnceLock<u16> = OnceLock::new();
 static LOCALSTACK_PORT: OnceLock<u16> = OnceLock::new();
 static PUBSUB_PORT: OnceLock<u16> = OnceLock::new();
 
@@ -34,6 +36,8 @@ static KAFKA_CONTAINER: OnceLock<Mutex<Option<testcontainers::Container<Kafka>>>
 static ELASTICMQ_CONTAINER: OnceLock<Mutex<Option<testcontainers::Container<ElasticMq>>>> =
     OnceLock::new();
 static ELASTICSEARCH_CONTAINER: OnceLock<Mutex<Option<testcontainers::Container<ElasticSearch>>>> =
+    OnceLock::new();
+static MEILISEARCH_CONTAINER: OnceLock<Mutex<Option<testcontainers::Container<Meilisearch>>>> =
     OnceLock::new();
 static LOCALSTACK_CONTAINER: OnceLock<Mutex<Option<testcontainers::Container<LocalStack>>>> =
     OnceLock::new();
@@ -116,6 +120,18 @@ fn cleanup_elasticmq_container() {
 #[dtor]
 fn cleanup_elasticsearch_container() {
     if let Some(mutex) = ELASTICSEARCH_CONTAINER.get() {
+        if let Ok(mut guard) = mutex.lock() {
+            if let Some(container) = guard.take() {
+                let _ = container.rm();
+            }
+        }
+    }
+}
+
+/// Cleanup function that runs at program exit to stop and remove the Meilisearch container.
+#[dtor]
+fn cleanup_meilisearch_container() {
+    if let Some(mutex) = MEILISEARCH_CONTAINER.get() {
         if let Ok(mut guard) = mutex.lock() {
             if let Some(container) = guard.take() {
                 let _ = container.rm();
@@ -341,6 +357,31 @@ pub async fn ensure_elasticsearch() -> u16 {
         })
         .join()
         .expect("Failed to join elasticsearch container startup thread")
+    })
+}
+
+/// Ensures a Meilisearch container is running and returns its HTTP API port.
+///
+/// The container is reused across tests. Used for testing Meilisearch sink.
+pub async fn ensure_meilisearch() -> u16 {
+    *MEILISEARCH_PORT.get_or_init(|| {
+        std::thread::spawn(|| {
+            let container: ContainerRequest<Meilisearch> = Meilisearch::default().into();
+
+            let container = container
+                .start()
+                .expect("Failed to start Meilisearch container");
+
+            let port = container
+                .get_host_port_ipv4(7700)
+                .expect("Failed to get Meilisearch port");
+
+            let _ = MEILISEARCH_CONTAINER.set(Mutex::new(Some(container)));
+
+            port
+        })
+        .join()
+        .expect("Failed to join container startup thread")
     })
 }
 

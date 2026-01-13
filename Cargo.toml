@@ -9,6 +9,7 @@ sink-elasticsearch = ["dep:elasticsearch", "dep:url"]
 sink-gcp-pubsub    = ["dep:google-cloud-pubsub", "dep:google-cloud-auth", "dep:google-cloud-googleapis"]
 sink-kafka         = ["dep:rdkafka"]
 sink-kinesis       = ["dep:aws-sdk-kinesis", "dep:aws-config"]
+sink-meilisearch   = ["dep:meilisearch-sdk"]
 sink-nats          = ["dep:async-nats"]
 sink-rabbitmq      = ["dep:lapin"]
 sink-redis-streams = ["dep:redis"]
@@ -68,6 +69,7 @@ google-cloud-auth = { version = "0.18", optional = true }
 google-cloud-googleapis = { version = "0.15", optional = true }
 google-cloud-pubsub = { version = "0.29", optional = true }
 lapin = { version = "2.5", optional = true }
+meilisearch-sdk = { version = "0.28", optional = true }
 rdkafka = { version = "0.36", optional = true, default-features = false, features = ["tokio", "cmake-build"] }
 redis = { version = "0.27", default-features = false, features = [
   "tokio-comp",
@@ -95,6 +97,7 @@ testcontainers-modules = { version = "0.11", optional = true, features = [
   "kafka",
   "elasticmq",
   "elastic_search",
+  "meilisearch",
   "localstack",
   "google_cloud_sdk_emulators",
   "blocking",
