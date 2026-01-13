@@ -108,9 +108,27 @@ jobs:
           body: |
             ${{ steps.changelog.outputs.content }}
 
-            ## Docker Image
+            ## Docker Images
+
+            Each sink has its own image. Pull the one you need:
+
+            | Sink | Image |
+            |------|-------|
+            | Elasticsearch | `ghcr.io/${{ github.repository }}:elasticsearch-${{ needs.extract_version.outputs.version }}` |
+            | GCP Pub/Sub | `ghcr.io/${{ github.repository }}:gcp-pubsub-${{ needs.extract_version.outputs.version }}` |
+            | Kafka | `ghcr.io/${{ github.repository }}:kafka-${{ needs.extract_version.outputs.version }}` |
+            | Kinesis | `ghcr.io/${{ github.repository }}:kinesis-${{ needs.extract_version.outputs.version }}` |
+            | Meilisearch | `ghcr.io/${{ github.repository }}:meilisearch-${{ needs.extract_version.outputs.version }}` |
+            | NATS | `ghcr.io/${{ github.repository }}:nats-${{ needs.extract_version.outputs.version }}` |
+            | RabbitMQ | `ghcr.io/${{ github.repository }}:rabbitmq-${{ needs.extract_version.outputs.version }}` |
+            | Redis Streams | `ghcr.io/${{ github.repository }}:redis-streams-${{ needs.extract_version.outputs.version }}` |
+            | Redis Strings | `ghcr.io/${{ github.repository }}:redis-strings-${{ needs.extract_version.outputs.version }}` |
+            | SNS | `ghcr.io/${{ github.repository }}:sns-${{ needs.extract_version.outputs.version }}` |
+            | SQS | `ghcr.io/${{ github.repository }}:sqs-${{ needs.extract_version.outputs.version }}` |
+            | Webhook | `ghcr.io/${{ github.repository }}:webhook-${{ needs.extract_version.outputs.version }}` |
+
             ```bash
-            docker pull ghcr.io/${{ github.repository }}:${{ needs.extract_version.outputs.version }}
+            docker pull ghcr.io/${{ github.repository }}:<sink>-${{ needs.extract_version.outputs.version }}
             ```
           tag_name: ${{ steps.changelog.outputs.version }}
           draft: true

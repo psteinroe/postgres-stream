@@ -12,7 +12,8 @@ RUN cargo chef prepare --recipe-path recipe.json
 FROM chef AS builder
 ARG TARGETPLATFORM
 ARG BUILDPLATFORM
-RUN echo "Native build on $BUILDPLATFORM for $TARGETPLATFORM"
+ARG FEATURES=""
+RUN echo "Native build on $BUILDPLATFORM for $TARGETPLATFORM with features: $FEATURES"
 
 # Install build dependencies including lld linker for faster linking
 RUN apt-get update && \
@@ -28,7 +29,12 @@ RUN apt-get update && \
 COPY .cargo/config.toml /app/.cargo/config.toml
 
 COPY --from=planner /app/recipe.json recipe.json
-RUN cargo chef cook --release --recipe-path recipe.json
+# Cook dependencies with features if specified
+RUN if [ -n "$FEATURES" ]; then \
+      cargo chef cook --release --features "$FEATURES" --recipe-path recipe.json; \
+    else \
+      cargo chef cook --release --recipe-path recipe.json; \
+    fi
 
 # Build application with optimizations
 # The release profile in .cargo/config.toml handles: thin LTO, strip, opt-level=3
@@ -37,7 +43,12 @@ COPY . .
 # Set sqlx to offline mode (migrations are in separate SQL files)
 ENV SQLX_OFFLINE=true
 
-RUN cargo build --release --bin postgres-stream && \
+# Build with features if specified
+RUN if [ -n "$FEATURES" ]; then \
+      cargo build --release --features "$FEATURES" --bin postgres-stream; \
+    else \
+      cargo build --release --bin postgres-stream; \
+    fi && \
     strip target/release/postgres-stream
 
 # Runtime stage with distroless for security
