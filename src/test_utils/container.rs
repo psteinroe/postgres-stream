@@ -4,6 +4,7 @@ use std::sync::{Mutex, OnceLock};
 use testcontainers::{ContainerRequest, ImageExt, runners::SyncRunner};
 use testcontainers_modules::elasticmq::ElasticMq;
 use testcontainers_modules::kafka::Kafka;
+use testcontainers_modules::localstack::LocalStack;
 use testcontainers_modules::nats::Nats;
 use testcontainers_modules::postgres::Postgres;
 use testcontainers_modules::rabbitmq::RabbitMq;
@@ -16,6 +17,7 @@ static NATS_PORT: OnceLock<u16> = OnceLock::new();
 static RABBITMQ_PORT: OnceLock<u16> = OnceLock::new();
 static KAFKA_PORT: OnceLock<u16> = OnceLock::new();
 static ELASTICMQ_PORT: OnceLock<u16> = OnceLock::new();
+static LOCALSTACK_PORT: OnceLock<u16> = OnceLock::new();
 
 // Using Mutex<Option<...>> so we can take ownership for cleanup.
 static POSTGRES_CONTAINER: OnceLock<Mutex<Option<testcontainers::Container<Postgres>>>> =
@@ -26,6 +28,8 @@ static RABBITMQ_CONTAINER: OnceLock<Mutex<Option<testcontainers::Container<Rabbi
     OnceLock::new();
 static KAFKA_CONTAINER: OnceLock<Mutex<Option<testcontainers::Container<Kafka>>>> = OnceLock::new();
 static ELASTICMQ_CONTAINER: OnceLock<Mutex<Option<testcontainers::Container<ElasticMq>>>> =
+    OnceLock::new();
+static LOCALSTACK_CONTAINER: OnceLock<Mutex<Option<testcontainers::Container<LocalStack>>>> =
     OnceLock::new();
 
 /// Cleanup function that runs at program exit to stop and remove the postgres container.
@@ -92,6 +96,18 @@ fn cleanup_kafka_container() {
 #[dtor]
 fn cleanup_elasticmq_container() {
     if let Some(mutex) = ELASTICMQ_CONTAINER.get() {
+        if let Ok(mut guard) = mutex.lock() {
+            if let Some(container) = guard.take() {
+                let _ = container.rm();
+            }
+        }
+    }
+}
+
+/// Cleanup function that runs at program exit to stop and remove the LocalStack container.
+#[dtor]
+fn cleanup_localstack_container() {
+    if let Some(mutex) = LOCALSTACK_CONTAINER.get() {
         if let Ok(mut guard) = mutex.lock() {
             if let Some(container) = guard.take() {
                 let _ = container.rm();
@@ -268,5 +284,30 @@ pub async fn ensure_elasticmq() -> u16 {
         })
         .join()
         .expect("Failed to join elasticmq container startup thread")
+    })
+}
+
+/// Ensures a LocalStack container is running and returns its port.
+///
+/// Uses singleton pattern to reuse the same container across tests.
+pub async fn ensure_localstack() -> u16 {
+    *LOCALSTACK_PORT.get_or_init(|| {
+        std::thread::spawn(|| {
+            let container: ContainerRequest<LocalStack> = LocalStack::default().into();
+
+            let container = container
+                .start()
+                .expect("Failed to start localstack container");
+
+            let port = container
+                .get_host_port_ipv4(4566)
+                .expect("Failed to get localstack container port");
+
+            let _ = LOCALSTACK_CONTAINER.set(Mutex::new(Some(container)));
+
+            port
+        })
+        .join()
+        .expect("Failed to join localstack container startup thread")
     })
 }
