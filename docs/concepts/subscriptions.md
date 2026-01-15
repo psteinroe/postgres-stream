@@ -173,5 +173,5 @@ $$;
 
 ## Next Steps
 
-- [Payload Extensions](payload-extensions.md) - Add computed fields to events
-- [Event Metadata](event-metadata.md) - Configure routing and delivery options
+- [Event Structure](event-structure.md) - Payload and metadata format
+- [Extensions](extensions.md) - Add computed fields and dynamic routing

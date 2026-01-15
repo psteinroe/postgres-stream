@@ -30,11 +30,11 @@ sink:
 
 ## Options
 
-| Option | Type | Required | Default | Description |
-|--------|------|----------|---------|-------------|
-| `url` | string | No | - | Default URL (can be overridden per-event) |
-| `headers` | object | No | {} | Custom headers to include |
-| `timeout_ms` | integer | No | 30000 | Request timeout in milliseconds |
+| Option | Type | Required | Default | Metadata Override | Description |
+|--------|------|----------|---------|-------------------|-------------|
+| `url` | string | No | - | Yes | Default URL (can be overridden per-event) |
+| `headers` | object | No | {} | Yes | Custom headers to include |
+| `timeout_ms` | integer | No | 30000 | No | Request timeout in milliseconds |
 
 ## Dynamic Routing
 
@@ -93,7 +93,7 @@ stream:
 
 sink:
   type: webhook
-  url: https://webhook.site/your-unique-id
+  url: https://httpbin.org/post
   headers:
     Authorization: Bearer secret-token
   timeout_ms: 30000

@@ -39,7 +39,7 @@ stream:
 
 sink:
   type: webhook
-  url: https://webhook.site/your-unique-url
+  url: https://httpbin.org/post
 ```
 
 ```bash

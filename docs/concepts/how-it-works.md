@@ -1,15 +1,15 @@
 # How It Works
 
-Understanding the Postgres Stream architecture.
-
 ## Overview
 
-Postgres Stream captures changes from your Postgres tables using a simple, database-native approach:
+Events are inserted into `pgstream.events` and streamed via logical replication to your sink.
 
-1. **You manage subscriptions** directly in the database (`pgstream.subscriptions` table)
-2. **Subscription changes automatically create database triggers** on the target tables
-3. **Application events fire the managed triggers**, which insert into a partitioned `events` table
-4. **Postgres Stream streams events** via logical replication and delivers them to your sink
+**Two ways to create events:**
+
+1. **Subscriptions** (optional) - Define triggers that automatically capture table changes
+2. **Manual inserts** - Insert directly into `pgstream.events` from your application
+
+See [Manual Events](manual-events.md) for the direct insert approach.
 
 ```mermaid
 flowchart LR
@@ -32,22 +32,24 @@ flowchart LR
 
 ## Why This Approach?
 
-Traditional CDC tools read directly from the WAL, which creates operational challenges:
+Postgres Stream uses logical replication, but reads from the `events` table instead of your application tables.
 
-- WAL retention grows if the sink is slow or down
-- Slot invalidation causes data loss
-- Complex infrastructure for high availability
+Traditional CDC reads application tables directly:
+- WAL retention grows if the sink is slow
+- Slot invalidation = data loss
+- Recovery depends on WAL availability
+- Destination must be highly available (e.g. Kafka cluster) to avoid data loss
 
-Postgres Stream uses a different model:
+Postgres Stream reads from the events table:
+- WAL released immediately after event written
+- Events table provides durability (7-day retention)
+- Recovery reads from the table, not WAL
+- Slot invalidation triggers automatic recovery
+- Destination can be simple (single webhook, Redis instance) - no HA required
 
-- Events are stored in a partitioned table in the database
-- WAL can be released immediately after events are written
-- The events table provides durability, not the WAL
-- Recovery reads from the table, not the WAL
+## Subscriptions (Optional)
 
-## Generated Triggers
-
-When you insert a subscription, Postgres Stream creates a trigger function on the target table. Here's a simplified example:
+When you insert a subscription, Postgres Stream creates a trigger on the target table:
 
 ```sql
 -- Auto-generated when you insert into subscriptions table
@@ -87,11 +89,9 @@ The actual generated code handles multiple subscriptions per table, merges `when
 
 ## Event Flow
 
-1. **Application writes** - Your application performs an INSERT, UPDATE, or DELETE
-2. **Trigger fires** - The generated trigger evaluates subscription conditions
-3. **Event written** - Matching events are inserted into `pgstream.events`
-4. **Logical replication** - Postgres Stream receives the event via replication
-5. **Sink delivery** - The event is delivered to your configured sink
+1. **Event written** - Via subscription trigger or direct insert into `pgstream.events`
+2. **Logical replication** - Postgres Stream receives the event
+3. **Sink delivery** - Event delivered to your configured sink
 
 ## Partitioned Events Table
 
@@ -104,6 +104,6 @@ Events are stored in a partitioned table with daily partitions:
 
 ## Next Steps
 
-- [Subscriptions](subscriptions.md) - Define which events to capture
-- [Payload Extensions](payload-extensions.md) - Add computed fields
-- [Event Metadata](event-metadata.md) - Configure routing
+- [Subscriptions](subscriptions.md) - Auto-capture table changes
+- [Manual Events](manual-events.md) - Direct event insertion
+- [Event Structure](event-structure.md) - Payload and metadata format

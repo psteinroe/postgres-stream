@@ -32,15 +32,15 @@ sink:
 
 ## Options
 
-| Option | Type | Required | Default | Description |
-|--------|------|----------|---------|-------------|
-| `brokers` | string | Yes | - | Comma-separated list of Kafka brokers |
-| `topic` | string | No | - | Default topic (can be overridden per-event) |
-| `sasl_username` | string | No | - | SASL username for authentication |
-| `sasl_password` | string | No | - | SASL password for authentication |
-| `sasl_mechanism` | string | No | - | SASL mechanism (PLAIN, SCRAM-SHA-256) |
-| `security_protocol` | string | No | - | Security protocol (SASL_SSL, SASL_PLAINTEXT) |
-| `delivery_timeout_ms` | integer | No | 5000 | Message delivery timeout |
+| Option | Type | Required | Default | Metadata Override | Description |
+|--------|------|----------|---------|-------------------|-------------|
+| `brokers` | string | Yes | - | No | Comma-separated list of Kafka brokers |
+| `topic` | string | No | - | Yes | Default topic (can be overridden per-event) |
+| `sasl_username` | string | No | - | No | SASL username for authentication |
+| `sasl_password` | string | No | - | No | SASL password for authentication |
+| `sasl_mechanism` | string | No | - | No | SASL mechanism (PLAIN, SCRAM-SHA-256) |
+| `security_protocol` | string | No | - | No | Security protocol (SASL_SSL, SASL_PLAINTEXT) |
+| `delivery_timeout_ms` | integer | No | 5000 | No | Message delivery timeout |
 
 ## Dynamic Routing
 

@@ -9,18 +9,14 @@ repo_name = "psteinroe/postgres-stream"
 
 nav = [
   { "Introduction" = "index.md" },
-  { "Getting Started" = [
-    "getting-started/index.md",
-    "getting-started/requirements.md",
-    "getting-started/configuration.md",
-    "getting-started/running.md"
-  ]},
+  { "Getting Started" = "getting-started.md" },
   { "Concepts" = [
     "concepts/how-it-works.md",
     "concepts/subscriptions.md",
-    "concepts/payload-extensions.md",
-    "concepts/event-metadata.md",
-    "concepts/failover.md"
+    "concepts/event-structure.md",
+    "concepts/extensions.md",
+    "concepts/failover.md",
+    "concepts/manual-events.md"
   ]},
   { "Sinks" = [
     "sinks/index.md",
@@ -35,12 +31,8 @@ nav = [
     "sinks/kinesis.md",
     "sinks/gcp-pubsub.md",
     "sinks/elasticsearch.md",
-    "sinks/meilisearch.md"
-  ]},
-  { "Guides" = [
-    "guides/custom-sinks.md",
-    "guides/manual-events.md",
-    "guides/partition-management.md"
+    "sinks/meilisearch.md",
+    "sinks/custom-sinks.md"
   ]},
   { "Reference" = [
     "reference/configuration.md",
@@ -51,7 +43,6 @@ nav = [
 
 [project.theme]
 features = [
-  "navigation.tabs",
   "navigation.sections",
   "navigation.expand",
   "navigation.path",

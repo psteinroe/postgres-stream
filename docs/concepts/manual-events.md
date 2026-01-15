@@ -49,56 +49,6 @@ values (
 );
 ```
 
-## Examples
-
-### Background Job Completion
-
-```sql
-insert into pgstream.events (payload, stream_id, metadata)
-values (
-  jsonb_build_object(
-    'type', 'job-completed',
-    'job_id', 123,
-    'result', 'success',
-    'duration_ms', 1500,
-    'completed_at', now()
-  ),
-  1,
-  '{"topic": "jobs"}'::jsonb
-);
-```
-
-### System Alert
-
-```sql
-insert into pgstream.events (payload, stream_id, metadata)
-values (
-  jsonb_build_object(
-    'type', 'alert',
-    'severity', 'warning',
-    'message', 'High memory usage detected',
-    'host', 'server-1'
-  ),
-  1,
-  '{"topic": "alerts", "priority": "high"}'::jsonb
-);
-```
-
-### Batch Import
-
-```sql
-insert into pgstream.events (payload, stream_id, metadata)
-select
-  jsonb_build_object(
-    'type', 'import-record',
-    'record_id', id,
-    'data', data
-  ),
-  1,
-  '{"topic": "imports"}'::jsonb
-from import_staging_table;
-```
-
 ## Event Flow
 
 Manually inserted events follow the same flow as trigger-generated events:
@@ -112,16 +62,6 @@ The only difference is they don't have the trigger metadata (`tg_name`, `tg_op`,
 ## Payload Structure
 
 You can use any JSON structure. The payload is delivered directly to the sink without modification.
-
-However, for consistency with trigger events, you might want to include:
-
-```sql
-jsonb_build_object(
-  'type', 'custom-event',      -- Event type identifier
-  'timestamp', extract(epoch from now()) * 1000,
-  'data', your_data            -- Your event data
-)
-```
 
 ## Combining with Subscriptions
 

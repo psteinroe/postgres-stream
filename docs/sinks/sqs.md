@@ -42,13 +42,13 @@ sink:
 
 ## Options
 
-| Option | Type | Required | Default | Description |
-|--------|------|----------|---------|-------------|
-| `queue_url` | string | No | - | SQS queue URL (can be overridden per-event) |
-| `region` | string | Yes | - | AWS region |
-| `endpoint_url` | string | No | - | Custom endpoint for LocalStack/ElasticMQ |
-| `access_key_id` | string | No | - | AWS access key (uses default chain if not set) |
-| `secret_access_key` | string | No | - | AWS secret key (uses default chain if not set) |
+| Option | Type | Required | Default | Metadata Override | Description |
+|--------|------|----------|---------|-------------------|-------------|
+| `queue_url` | string | No | - | Yes | SQS queue URL (can be overridden per-event) |
+| `region` | string | Yes | - | No | AWS region |
+| `endpoint_url` | string | No | - | No | Custom endpoint for LocalStack/ElasticMQ |
+| `access_key_id` | string | No | - | No | AWS access key (uses default chain if not set) |
+| `secret_access_key` | string | No | - | No | AWS secret key (uses default chain if not set) |
 
 ## Dynamic Routing
 

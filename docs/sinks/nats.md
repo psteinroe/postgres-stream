@@ -28,10 +28,10 @@ sink:
 
 ## Options
 
-| Option | Type | Required | Default | Description |
-|--------|------|----------|---------|-------------|
-| `url` | string | Yes | - | NATS server URL |
-| `subject` | string | No | - | Default subject (can be overridden per-event) |
+| Option | Type | Required | Default | Metadata Override | Description |
+|--------|------|----------|---------|-------------------|-------------|
+| `url` | string | Yes | - | No | NATS server URL |
+| `subject` | string | No | - | Yes | Default subject (can be overridden per-event) |
 
 ## Dynamic Routing
 

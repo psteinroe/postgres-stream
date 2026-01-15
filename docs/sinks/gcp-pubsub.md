@@ -29,11 +29,11 @@ sink:
 
 ## Options
 
-| Option | Type | Required | Default | Description |
-|--------|------|----------|---------|-------------|
-| `project_id` | string | Yes | - | GCP project ID |
-| `topic` | string | Yes | - | Pub/Sub topic name |
-| `emulator_host` | string | No | - | Emulator host for testing |
+| Option | Type | Required | Default | Metadata Override | Description |
+|--------|------|----------|---------|-------------------|-------------|
+| `project_id` | string | Yes | - | No | GCP project ID |
+| `topic` | string | Yes | - | No | Pub/Sub topic name |
+| `emulator_host` | string | No | - | No | Emulator host for testing |
 
 ## Authentication
 

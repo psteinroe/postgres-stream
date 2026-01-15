@@ -27,10 +27,11 @@ sink:
 
 ## Options
 
-| Option | Type | Required | Default | Description |
-|--------|------|----------|---------|-------------|
-| `url` | string | Yes | - | Redis connection URL |
-| `key_prefix` | string | No | - | Prefix for all keys |
+| Option | Type | Required | Default | Metadata Override | Description |
+|--------|------|----------|---------|-------------------|-------------|
+| `url` | string | Yes | - | No | Redis connection URL |
+| `key_prefix` | string | No | - | No | Prefix for all keys |
+| `key` | - | - | - | Yes | Full key (via metadata only) |
 
 ## Key Resolution
 

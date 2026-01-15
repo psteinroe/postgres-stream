@@ -28,10 +28,10 @@ sink:
 
 ## Options
 
-| Option | Type | Required | Default | Description |
-|--------|------|----------|---------|-------------|
-| `url` | string | Yes | - | Elasticsearch URL (may include credentials) |
-| `index` | string | No | - | Default index (can be overridden per-event) |
+| Option | Type | Required | Default | Metadata Override | Description |
+|--------|------|----------|---------|-------------------|-------------|
+| `url` | string | Yes | - | No | Elasticsearch URL (may include credentials) |
+| `index` | string | No | - | Yes | Default index (can be overridden per-event) |
 
 ## Dynamic Routing
 

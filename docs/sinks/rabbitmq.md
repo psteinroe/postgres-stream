@@ -31,12 +31,12 @@ sink:
 
 ## Options
 
-| Option | Type | Required | Default | Description |
-|--------|------|----------|---------|-------------|
-| `url` | string | Yes | - | RabbitMQ connection URL |
-| `exchange` | string | No | - | Exchange name (can be overridden per-event) |
-| `routing_key` | string | No | - | Routing key (can be overridden per-event) |
-| `queue` | string | No | - | Optional queue to declare and bind |
+| Option | Type | Required | Default | Metadata Override | Description |
+|--------|------|----------|---------|-------------------|-------------|
+| `url` | string | Yes | - | No | RabbitMQ connection URL |
+| `exchange` | string | No | - | Yes | Exchange name (can be overridden per-event) |
+| `routing_key` | string | No | - | Yes | Routing key (can be overridden per-event) |
+| `queue` | string | No | - | No | Optional queue to declare and bind |
 
 ## Dynamic Routing
 

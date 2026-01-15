@@ -29,11 +29,11 @@ sink:
 
 ## Options
 
-| Option | Type | Required | Default | Description |
-|--------|------|----------|---------|-------------|
-| `url` | string | Yes | - | Meilisearch URL |
-| `index` | string | No | - | Default index (can be overridden per-event) |
-| `api_key` | string | No | - | API key for authentication |
+| Option | Type | Required | Default | Metadata Override | Description |
+|--------|------|----------|---------|-------------------|-------------|
+| `url` | string | Yes | - | No | Meilisearch URL |
+| `index` | string | No | - | Yes | Default index (can be overridden per-event) |
+| `api_key` | string | No | - | No | API key for authentication |
 
 ## Dynamic Routing
 

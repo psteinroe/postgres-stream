@@ -29,11 +29,11 @@ sink:
 
 ## Options
 
-| Option | Type | Required | Default | Description |
-|--------|------|----------|---------|-------------|
-| `url` | string | Yes | - | Redis connection URL |
-| `stream_name` | string | No | - | Default stream (can be overridden per-event) |
-| `max_len` | integer | No | - | Maximum stream length (uses MAXLEN ~) |
+| Option | Type | Required | Default | Metadata Override | Description |
+|--------|------|----------|---------|-------------------|-------------|
+| `url` | string | Yes | - | No | Redis connection URL |
+| `stream_name` | string | No | - | Yes | Default stream (can be overridden per-event) |
+| `max_len` | integer | No | - | No | Maximum stream length (uses MAXLEN ~) |
 
 ## Dynamic Routing
 

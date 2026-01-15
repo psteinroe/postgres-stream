@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="media/logo.png" alt="Postgres Stream" width="300">
+  <img src="media/logo.png" alt="Postgres Stream" width="500">
 </p>
 
 <h1 align="center">Postgres Stream</h1>
@@ -10,7 +10,7 @@
 
 ## What is Postgres Stream?
 
-Postgres Stream captures changes from your Postgres tables and delivers them to external systems like Kafka, RabbitMQ, Redis, webhooks, and cloud services. It uses Postgres's native logical replication and stores events durably in the database itself.
+Postgres Stream captures changes from your Postgres tables and delivers them to external systems like Kafka, RabbitMQ, Redis, Webhooks, and cloud services. It uses Postgres native logical replication and stores events durably in the database itself.
 
 ## Key Features
 
@@ -21,10 +21,12 @@ Postgres Stream captures changes from your Postgres tables and delivers them to 
 
 ## How It Works
 
-1. **You manage subscriptions** directly in the database (`pgstream.subscriptions` table)
-2. **Subscription changes automatically create triggers** on the target tables
-3. **Application events fire the managed triggers**, which insert into a partitioned `events` table
-4. **Postgres Stream streams events** via logical replication and delivers them to your sink
+Events are inserted into the `pgstream.events` table and streamed via logical replication to your sink.
+
+**Two ways to create events:**
+
+1. **Subscriptions** (optional) - Define triggers that automatically capture table changes
+2. **Manual inserts** - Insert directly into `pgstream.events` from your application or database functions
 
 ## Supported Sinks
 
@@ -83,6 +85,6 @@ While Postgres Stream provides strong durability guarantees, there are some cons
 
 ## Next Steps
 
-- [Getting Started](getting-started/index.md) - Set up your first stream
+- [Getting Started](getting-started.md) - Set up your first stream
 - [How It Works](concepts/how-it-works.md) - Understand the architecture
 - [Sinks](sinks/index.md) - Choose your destination
