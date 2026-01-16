@@ -41,3 +41,11 @@ reset-git:
     git pull
     just clear-branches
 
+# Serve documentation locally
+docs:
+    uvx zensical serve
+
+# Build documentation
+docs-build:
+    uvx zensical build
+
