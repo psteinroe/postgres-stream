@@ -21,26 +21,28 @@ flowchart LR
     D -->|streams| E[Postgres<br/>Stream]
     E -->|delivers| F[sink<br/>queue/http]
 
-    style Postgres fill:#dbeafe,stroke:#2563eb,stroke-width:3px
-    style A fill:#f3e8ff,stroke:#9333ea,stroke-width:2px,color:#581c87
-    style B fill:#fed7aa,stroke:#ea580c,stroke-width:2px,color:#7c2d12
-    style C fill:#bfdbfe,stroke:#2563eb,stroke-width:2px,color:#1e40af
-    style D fill:#99f6e4,stroke:#14b8a6,stroke-width:2px,color:#115e59
-    style E fill:#fecdd3,stroke:#e11d48,stroke-width:3px,color:#881337
-    style F fill:#bbf7d0,stroke:#16a34a,stroke-width:3px,color:#14532d
+    style Postgres fill:#3b82f6,stroke:#60a5fa,stroke-width:3px,color:#fff
+    style A fill:#3b82f6,stroke:#60a5fa,stroke-width:2px,color:#fff
+    style B fill:#3b82f6,stroke:#60a5fa,stroke-width:2px,color:#fff
+    style C fill:#3b82f6,stroke:#60a5fa,stroke-width:2px,color:#fff
+    style D fill:#3b82f6,stroke:#60a5fa,stroke-width:2px,color:#fff
+    style E fill:#3b82f6,stroke:#60a5fa,stroke-width:3px,color:#fff
+    style F fill:#3b82f6,stroke:#60a5fa,stroke-width:3px,color:#fff
 ```
 
 ## Why This Approach?
 
-Postgres Stream uses logical replication, but reads from the `events` table instead of your application tables.
+Postgres Stream uses logical replication, but subscribes only to the `events` table instead of your application tables.
 
 Traditional CDC reads application tables directly:
+
 - WAL retention grows if the sink is slow
 - Slot invalidation = data loss
 - Recovery depends on WAL availability
 - Destination must be highly available (e.g. Kafka cluster) to avoid data loss
 
-Postgres Stream reads from the events table:
+But we only care about the events we subscribed to, and do not want to replicate your entire database! By streaming from a single partitioned `events` table, we get:
+
 - WAL released immediately after event written
 - Events table provides durability (7-day retention)
 - Recovery reads from the table, not WAL

@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="media/logo.png" alt="Postgres Stream" width="500">
+  <img src="media/logo.png" alt="Postgres Stream" width="300">
 </p>
 
 <h1 align="center">Postgres Stream</h1>
