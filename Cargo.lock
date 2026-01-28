@@ -1722,7 +1722,7 @@ dependencies = [
 [[package]]
 name = "etl"
 version = "0.1.0"
-source = "git+https://github.com/supabase/etl?rev=dd2987a55efc16aeb4402e4b06853c7731a6155a#dd2987a55efc16aeb4402e4b06853c7731a6155a"
+source = "git+https://github.com/supabase/etl?rev=6c0d642ce832e6c3bdbe5f7963404e333a5413d0#6c0d642ce832e6c3bdbe5f7963404e333a5413d0"
 dependencies = [
  "aws-lc-rs",
  "byteorder",
@@ -1751,7 +1751,7 @@ dependencies = [
 [[package]]
 name = "etl-config"
 version = "0.1.0"
-source = "git+https://github.com/supabase/etl?rev=dd2987a55efc16aeb4402e4b06853c7731a6155a#dd2987a55efc16aeb4402e4b06853c7731a6155a"
+source = "git+https://github.com/supabase/etl?rev=6c0d642ce832e6c3bdbe5f7963404e333a5413d0#6c0d642ce832e6c3bdbe5f7963404e333a5413d0"
 dependencies = [
  "config",
  "secrecy",
@@ -1764,7 +1764,7 @@ dependencies = [
 [[package]]
 name = "etl-postgres"
 version = "0.1.0"
-source = "git+https://github.com/supabase/etl?rev=dd2987a55efc16aeb4402e4b06853c7731a6155a#dd2987a55efc16aeb4402e4b06853c7731a6155a"
+source = "git+https://github.com/supabase/etl?rev=6c0d642ce832e6c3bdbe5f7963404e333a5413d0#6c0d642ce832e6c3bdbe5f7963404e333a5413d0"
 dependencies = [
  "bytes",
  "chrono",
@@ -2492,7 +2492,7 @@ dependencies = [
  "httpdate",
  "itoa",
  "pin-project-lite",
- "socket2 0.5.10",
+ "socket2 0.4.10",
  "tokio",
  "tower-service",
  "tracing",
