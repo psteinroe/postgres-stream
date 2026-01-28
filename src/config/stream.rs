@@ -1,5 +1,6 @@
 use etl::config::{
     BatchConfig, PgConnectionConfig, PgConnectionConfigWithoutSecrets, PipelineConfig,
+    TableSyncCopyConfig,
 };
 use serde::{Deserialize, Serialize};
 
@@ -65,6 +66,7 @@ impl From<StreamConfig> for PipelineConfig {
             // todo
             table_error_retry_delay_ms: 1000,
             table_error_retry_max_attempts: 5,
+            table_sync_copy: TableSyncCopyConfig::default(),
         }
     }
 }
