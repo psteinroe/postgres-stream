@@ -123,10 +123,10 @@ impl MeilisearchSink {
     /// Priority: event.metadata["index"] > config.index
     fn resolve_index<'a>(&'a self, event: &'a TriggeredEvent) -> Option<&'a str> {
         // Check event metadata first.
-        if let Some(ref metadata) = event.metadata {
-            if let Some(index) = metadata.get("index").and_then(|v| v.as_str()) {
-                return Some(index);
-            }
+        if let Some(ref metadata) = event.metadata
+            && let Some(index) = metadata.get("index").and_then(|v| v.as_str())
+        {
+            return Some(index);
         }
         // Fall back to config.
         self.index.as_deref()

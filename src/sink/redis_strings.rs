@@ -97,10 +97,10 @@ impl RedisStringsSink {
     /// Resolves the Redis key for an event from metadata or default (event ID).
     fn resolve_key(&self, event: &TriggeredEvent) -> String {
         // First check event metadata for dynamic key.
-        if let Some(ref metadata) = event.metadata {
-            if let Some(key) = metadata.get("key").and_then(|v| v.as_str()) {
-                return key.to_string();
-            }
+        if let Some(ref metadata) = event.metadata
+            && let Some(key) = metadata.get("key").and_then(|v| v.as_str())
+        {
+            return key.to_string();
         }
         // Fall back to event ID with optional prefix.
         match &self.key_prefix {

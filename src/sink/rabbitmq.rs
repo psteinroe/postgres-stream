@@ -139,29 +139,29 @@ impl RabbitmqSink {
                 .await?;
 
             // If a queue is specified, declare and bind it.
-            if let Some(ref queue_name) = config.queue {
-                if let Some(ref routing_key) = config.routing_key {
-                    channel
-                        .queue_declare(
-                            queue_name,
-                            QueueDeclareOptions {
-                                durable: true,
-                                ..Default::default()
-                            },
-                            FieldTable::default(),
-                        )
-                        .await?;
+            if let Some(ref queue_name) = config.queue
+                && let Some(ref routing_key) = config.routing_key
+            {
+                channel
+                    .queue_declare(
+                        queue_name,
+                        QueueDeclareOptions {
+                            durable: true,
+                            ..Default::default()
+                        },
+                        FieldTable::default(),
+                    )
+                    .await?;
 
-                    channel
-                        .queue_bind(
-                            queue_name,
-                            exchange,
-                            routing_key,
-                            QueueBindOptions::default(),
-                            FieldTable::default(),
-                        )
-                        .await?;
-                }
+                channel
+                    .queue_bind(
+                        queue_name,
+                        exchange,
+                        routing_key,
+                        QueueBindOptions::default(),
+                        FieldTable::default(),
+                    )
+                    .await?;
             }
         }
 
@@ -175,10 +175,10 @@ impl RabbitmqSink {
     /// Resolves the exchange name for an event from metadata or config.
     fn resolve_exchange<'a>(&'a self, event: &'a TriggeredEvent) -> Option<&'a str> {
         // First check event metadata for dynamic exchange.
-        if let Some(ref metadata) = event.metadata {
-            if let Some(exchange) = metadata.get("exchange").and_then(|v| v.as_str()) {
-                return Some(exchange);
-            }
+        if let Some(ref metadata) = event.metadata
+            && let Some(exchange) = metadata.get("exchange").and_then(|v| v.as_str())
+        {
+            return Some(exchange);
         }
         // Fall back to config exchange.
         self.exchange.as_deref()
@@ -187,10 +187,10 @@ impl RabbitmqSink {
     /// Resolves the routing key for an event from metadata or config.
     fn resolve_routing_key<'a>(&'a self, event: &'a TriggeredEvent) -> Option<&'a str> {
         // First check event metadata for dynamic routing key.
-        if let Some(ref metadata) = event.metadata {
-            if let Some(routing_key) = metadata.get("routing_key").and_then(|v| v.as_str()) {
-                return Some(routing_key);
-            }
+        if let Some(ref metadata) = event.metadata
+            && let Some(routing_key) = metadata.get("routing_key").and_then(|v| v.as_str())
+        {
+            return Some(routing_key);
         }
         // Fall back to config routing key.
         self.routing_key.as_deref()
