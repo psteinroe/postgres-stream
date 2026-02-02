@@ -151,11 +151,10 @@ impl SnsSink {
     /// Resolves the topic ARN for an event from metadata or config.
     fn resolve_topic_arn<'a>(&'a self, event: &'a TriggeredEvent) -> Option<&'a str> {
         // First check event metadata for dynamic topic
-        if let Some(ref metadata) = event.metadata {
-            if let Some(topic) = metadata.get("topic").and_then(|v| v.as_str()) {
+        if let Some(ref metadata) = event.metadata
+            && let Some(topic) = metadata.get("topic").and_then(|v| v.as_str()) {
                 return Some(topic);
             }
-        }
         // Fall back to config topic ARN
         self.topic_arn.as_deref()
     }

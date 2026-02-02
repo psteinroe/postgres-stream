@@ -47,121 +47,101 @@ static PUBSUB_CONTAINER: OnceLock<Mutex<Option<testcontainers::Container<CloudSd
 /// Cleanup function that runs at program exit to stop and remove the postgres container.
 #[dtor]
 fn cleanup_postgres_container() {
-    if let Some(mutex) = POSTGRES_CONTAINER.get() {
-        if let Ok(mut guard) = mutex.lock() {
-            if let Some(container) = guard.take() {
+    if let Some(mutex) = POSTGRES_CONTAINER.get()
+        && let Ok(mut guard) = mutex.lock()
+            && let Some(container) = guard.take() {
                 let _ = container.rm();
             }
-        }
-    }
 }
 
 /// Cleanup function that runs at program exit to stop and remove the redis container.
 #[dtor]
 fn cleanup_redis_container() {
-    if let Some(mutex) = REDIS_CONTAINER.get() {
-        if let Ok(mut guard) = mutex.lock() {
-            if let Some(container) = guard.take() {
+    if let Some(mutex) = REDIS_CONTAINER.get()
+        && let Ok(mut guard) = mutex.lock()
+            && let Some(container) = guard.take() {
                 let _ = container.rm();
             }
-        }
-    }
 }
 
 /// Cleanup function that runs at program exit to stop and remove the NATS container.
 #[dtor]
 fn cleanup_nats_container() {
-    if let Some(mutex) = NATS_CONTAINER.get() {
-        if let Ok(mut guard) = mutex.lock() {
-            if let Some(container) = guard.take() {
+    if let Some(mutex) = NATS_CONTAINER.get()
+        && let Ok(mut guard) = mutex.lock()
+            && let Some(container) = guard.take() {
                 let _ = container.rm();
             }
-        }
-    }
 }
 
 /// Cleanup function that runs at program exit to stop and remove the RabbitMQ container.
 #[dtor]
 fn cleanup_rabbitmq_container() {
-    if let Some(mutex) = RABBITMQ_CONTAINER.get() {
-        if let Ok(mut guard) = mutex.lock() {
-            if let Some(container) = guard.take() {
+    if let Some(mutex) = RABBITMQ_CONTAINER.get()
+        && let Ok(mut guard) = mutex.lock()
+            && let Some(container) = guard.take() {
                 let _ = container.rm();
             }
-        }
-    }
 }
 
 /// Cleanup function that runs at program exit to stop and remove the Kafka container.
 #[dtor]
 fn cleanup_kafka_container() {
-    if let Some(mutex) = KAFKA_CONTAINER.get() {
-        if let Ok(mut guard) = mutex.lock() {
-            if let Some(container) = guard.take() {
+    if let Some(mutex) = KAFKA_CONTAINER.get()
+        && let Ok(mut guard) = mutex.lock()
+            && let Some(container) = guard.take() {
                 let _ = container.rm();
             }
-        }
-    }
 }
 
 /// Cleanup function that runs at program exit to stop and remove the ElasticMQ container.
 #[dtor]
 fn cleanup_elasticmq_container() {
-    if let Some(mutex) = ELASTICMQ_CONTAINER.get() {
-        if let Ok(mut guard) = mutex.lock() {
-            if let Some(container) = guard.take() {
+    if let Some(mutex) = ELASTICMQ_CONTAINER.get()
+        && let Ok(mut guard) = mutex.lock()
+            && let Some(container) = guard.take() {
                 let _ = container.rm();
             }
-        }
-    }
 }
 
 /// Cleanup function that runs at program exit to stop and remove the Elasticsearch container.
 #[dtor]
 fn cleanup_elasticsearch_container() {
-    if let Some(mutex) = ELASTICSEARCH_CONTAINER.get() {
-        if let Ok(mut guard) = mutex.lock() {
-            if let Some(container) = guard.take() {
+    if let Some(mutex) = ELASTICSEARCH_CONTAINER.get()
+        && let Ok(mut guard) = mutex.lock()
+            && let Some(container) = guard.take() {
                 let _ = container.rm();
             }
-        }
-    }
 }
 
 /// Cleanup function that runs at program exit to stop and remove the Meilisearch container.
 #[dtor]
 fn cleanup_meilisearch_container() {
-    if let Some(mutex) = MEILISEARCH_CONTAINER.get() {
-        if let Ok(mut guard) = mutex.lock() {
-            if let Some(container) = guard.take() {
+    if let Some(mutex) = MEILISEARCH_CONTAINER.get()
+        && let Ok(mut guard) = mutex.lock()
+            && let Some(container) = guard.take() {
                 let _ = container.rm();
             }
-        }
-    }
 }
 
 /// Cleanup function that runs at program exit to stop and remove the LocalStack container.
 #[dtor]
 fn cleanup_localstack_container() {
-    if let Some(mutex) = LOCALSTACK_CONTAINER.get() {
-        if let Ok(mut guard) = mutex.lock() {
-            if let Some(container) = guard.take() {
+    if let Some(mutex) = LOCALSTACK_CONTAINER.get()
+        && let Ok(mut guard) = mutex.lock()
+            && let Some(container) = guard.take() {
                 let _ = container.rm();
             }
-        }
-    }
 }
 
 /// Cleanup function that runs at program exit to stop and remove the Pub/Sub emulator container.
 #[dtor]
 fn cleanup_pubsub_container() {
-    if let Some(mutex) = PUBSUB_CONTAINER.get() {
-        if let Ok(mut guard) = mutex.lock() {
-            if let Some(container) = guard.take() {
+    if let Some(mutex) = PUBSUB_CONTAINER.get()
+        && let Ok(mut guard) = mutex.lock()
+            && let Some(container) = guard.take() {
                 let _ = container.rm();
             }
-        }
-    }
 }
 
 pub async fn ensure_postgres() -> u16 {

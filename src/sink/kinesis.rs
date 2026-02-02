@@ -151,11 +151,10 @@ impl KinesisSink {
     /// Resolves the stream name for an event from metadata or config.
     fn resolve_stream_name<'a>(&'a self, event: &'a TriggeredEvent) -> Option<&'a str> {
         // First check event metadata for dynamic stream
-        if let Some(ref metadata) = event.metadata {
-            if let Some(stream) = metadata.get("stream").and_then(|v| v.as_str()) {
+        if let Some(ref metadata) = event.metadata
+            && let Some(stream) = metadata.get("stream").and_then(|v| v.as_str()) {
                 return Some(stream);
             }
-        }
         // Fall back to config stream name
         self.stream_name.as_deref()
     }
