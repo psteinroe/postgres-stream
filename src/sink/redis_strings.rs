@@ -98,9 +98,10 @@ impl RedisStringsSink {
     fn resolve_key(&self, event: &TriggeredEvent) -> String {
         // First check event metadata for dynamic key.
         if let Some(ref metadata) = event.metadata
-            && let Some(key) = metadata.get("key").and_then(|v| v.as_str()) {
-                return key.to_string();
-            }
+            && let Some(key) = metadata.get("key").and_then(|v| v.as_str())
+        {
+            return key.to_string();
+        }
         // Fall back to event ID with optional prefix.
         match &self.key_prefix {
             Some(prefix) => format!("{}:{}", prefix, event.id.id),

@@ -97,9 +97,10 @@ impl NatsSink {
     fn resolve_subject<'a>(&'a self, event: &'a TriggeredEvent) -> Option<&'a str> {
         // First check event metadata for dynamic subject (using generic "topic" key).
         if let Some(ref metadata) = event.metadata
-            && let Some(topic) = metadata.get("topic").and_then(|v| v.as_str()) {
-                return Some(topic);
-            }
+            && let Some(topic) = metadata.get("topic").and_then(|v| v.as_str())
+        {
+            return Some(topic);
+        }
         // Fall back to config subject.
         self.subject.as_deref()
     }

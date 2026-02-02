@@ -152,9 +152,10 @@ impl SqsSink {
     fn resolve_queue_url<'a>(&'a self, event: &'a TriggeredEvent) -> Option<&'a str> {
         // First check event metadata for dynamic queue URL
         if let Some(ref metadata) = event.metadata
-            && let Some(queue_url) = metadata.get("queue_url").and_then(|v| v.as_str()) {
-                return Some(queue_url);
-            }
+            && let Some(queue_url) = metadata.get("queue_url").and_then(|v| v.as_str())
+        {
+            return Some(queue_url);
+        }
         // Fall back to config queue URL
         self.queue_url.as_deref()
     }

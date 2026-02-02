@@ -54,9 +54,10 @@ async fn create_kinesis_stream(endpoint: &str, stream_name: &str) {
             .expect("Failed to describe stream");
 
         if let Some(stream_desc) = desc.stream_description()
-            && stream_desc.stream_status() == &aws_sdk_kinesis::types::StreamStatus::Active {
-                return;
-            }
+            && stream_desc.stream_status() == &aws_sdk_kinesis::types::StreamStatus::Active
+        {
+            return;
+        }
 
         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
     }

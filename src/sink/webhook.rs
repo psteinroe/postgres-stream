@@ -132,9 +132,10 @@ impl WebhookSink {
     fn resolve_url<'a>(&'a self, event: &'a TriggeredEvent) -> Option<&'a str> {
         // First check event metadata for dynamic URL
         if let Some(ref metadata) = event.metadata
-            && let Some(url) = metadata.get("url").and_then(|v| v.as_str()) {
-                return Some(url);
-            }
+            && let Some(url) = metadata.get("url").and_then(|v| v.as_str())
+        {
+            return Some(url);
+        }
         // Fall back to config URL
         self.url.as_deref()
     }
@@ -145,13 +146,14 @@ impl WebhookSink {
 
         // Merge headers from event metadata if present
         if let Some(ref metadata) = event.metadata
-            && let Some(extra_headers) = metadata.get("headers").and_then(|v| v.as_object()) {
-                for (key, value) in extra_headers {
-                    if let Some(v) = value.as_str() {
-                        headers.insert(key.clone(), v.to_string());
-                    }
+            && let Some(extra_headers) = metadata.get("headers").and_then(|v| v.as_object())
+        {
+            for (key, value) in extra_headers {
+                if let Some(v) = value.as_str() {
+                    headers.insert(key.clone(), v.to_string());
                 }
             }
+        }
 
         headers
     }

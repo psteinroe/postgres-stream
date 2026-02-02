@@ -74,10 +74,11 @@ impl From<&ElasticsearchSinkConfig> for ElasticsearchSinkConfigWithoutSecrets {
 fn extract_host(url: &str) -> String {
     // Parse URL and extract just the host:port portion.
     if let Ok(parsed) = url::Url::parse(url)
-        && let Some(host) = parsed.host_str() {
-            let port = parsed.port().map(|p| format!(":{p}")).unwrap_or_default();
-            return format!("{host}{port}");
-        }
+        && let Some(host) = parsed.host_str()
+    {
+        let port = parsed.port().map(|p| format!(":{p}")).unwrap_or_default();
+        return format!("{host}{port}");
+    }
     // Fallback: return as-is if parsing fails.
     url.to_string()
 }
@@ -119,9 +120,10 @@ impl ElasticsearchSink {
     fn resolve_index<'a>(&'a self, event: &'a TriggeredEvent) -> Option<&'a str> {
         // Check event metadata first.
         if let Some(ref metadata) = event.metadata
-            && let Some(index) = metadata.get("index").and_then(|v| v.as_str()) {
-                return Some(index);
-            }
+            && let Some(index) = metadata.get("index").and_then(|v| v.as_str())
+        {
+            return Some(index);
+        }
         // Fall back to config.
         self.index.as_deref()
     }
