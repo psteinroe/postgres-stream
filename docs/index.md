@@ -28,6 +28,14 @@ Events are inserted into the `pgstream.events` table and streamed via logical re
 1. **Subscriptions** (optional) - Define triggers that automatically capture table changes
 2. **Manual inserts** - Insert directly into `pgstream.events` from your application or database functions
 
+## Trade-offs
+
+While Postgres Stream provides strong durability guarantees, there are some considerations:
+
+- **Small overhead** - Additional INSERT into `events` table on every subscribed operation
+- **Partition management** - Monitor partition growth if event volume is very high
+- **Not for dynamic subscriptions** - Each subscription change recreates database triggers
+
 ## Supported Sinks
 
 | Sink | Use Case |
@@ -74,14 +82,6 @@ sink:
 docker run -v $(pwd)/config.yaml:/config.yaml \
   ghcr.io/psteinroe/postgres-stream:kafka-latest
 ```
-
-## Trade-offs
-
-While Postgres Stream provides strong durability guarantees, there are some considerations:
-
-- **Small overhead** - Additional INSERT into `events` table on every subscribed operation
-- **Partition management** - Monitor partition growth if event volume is very high
-- **Not for dynamic subscriptions** - Each subscription change recreates database triggers
 
 ## Next Steps
 
