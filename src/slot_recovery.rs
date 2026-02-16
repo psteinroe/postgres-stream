@@ -27,11 +27,14 @@ use crate::types::SlotName;
 /// Checks if an error indicates a replication slot has been invalidated.
 ///
 /// Postgres returns error code 55000 (OBJECT_NOT_IN_PREREQUISITE_STATE) with the message
-/// "can no longer get changes from replication slot" when a slot is invalidated.
+/// "can no longer get changes from replication slot" or
+/// "cannot read from logical replication slot" when a slot is invalidated.
 #[must_use]
 pub fn is_slot_invalidation_error(error: &EtlError) -> bool {
     let msg = error.to_string().to_lowercase();
     msg.contains("can no longer get changes from replication slot")
+        || msg.contains("cannot read from logical replication slot")
+        || msg.contains("has been invalidated because it exceeded the maximum reserved size")
 }
 
 /// Handles recovery from an invalidated replication slot.
@@ -176,6 +179,24 @@ mod tests {
         let error = etl::etl_error!(
             etl::error::ErrorKind::InvalidState,
             "CAN NO LONGER GET CHANGES FROM REPLICATION SLOT \"test_slot\""
+        );
+        assert!(is_slot_invalidation_error(&error));
+    }
+
+    #[test]
+    fn test_is_slot_invalidation_error_logical_slot_read_message() {
+        let error = etl::etl_error!(
+            etl::error::ErrorKind::InvalidState,
+            "db error: ERROR: cannot read from logical replication slot \"test_slot\""
+        );
+        assert!(is_slot_invalidation_error(&error));
+    }
+
+    #[test]
+    fn test_is_slot_invalidation_error_maximum_reserved_size_message() {
+        let error = etl::etl_error!(
+            etl::error::ErrorKind::InvalidState,
+            "DETAIL: This slot has been invalidated because it exceeded the maximum reserved size"
         );
         assert!(is_slot_invalidation_error(&error));
     }
