@@ -659,3 +659,209 @@ async fn test_pipeline_recovers_from_invalidated_slot() {
         "Failover checkpoint timestamp should be cleared after successful recovery"
     );
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_slot_recovery_preserves_existing_failover_checkpoint() {
+    let _lock = acquire_exclusive_test_lock().await;
+
+    let db = TestDatabase::spawn().await;
+    let stream_config = test_stream_config_with_id(&db, unique_pipeline_id());
+    let pipeline_id = stream_config.id;
+    let slot_name = format!("supabase_etl_apply_{pipeline_id}");
+
+    migrate_etl(&db.config)
+        .await
+        .expect("Failed to run ETL migrations");
+
+    db.ensure_today_partition().await;
+
+    // Create an existing failover checkpoint before the slot is created.
+    // Recovery must preserve this checkpoint.
+    let existing_checkpoint: (String, chrono::DateTime<chrono::Utc>) = sqlx::query_as(
+        "INSERT INTO pgstream.events (id, payload, stream_id, created_at, lsn)
+         VALUES (gen_random_uuid(), $1, $2, now(), pg_current_wal_lsn())
+         RETURNING id::text, created_at",
+    )
+    .bind(serde_json::json!({"existing_failover_checkpoint": true}))
+    .bind(pipeline_id as i64)
+    .fetch_one(&db.pool)
+    .await
+    .expect("Should insert existing checkpoint event");
+
+    // Start and stop pipeline once to create the replication slot.
+    {
+        let state_store = PostgresStore::new(pipeline_id, db.config.clone());
+        let sink = MemorySink::new();
+        let pgstream = PgStream::create(stream_config.clone(), sink, state_store.clone())
+            .await
+            .expect("Failed to create PgStream");
+
+        let pipeline_config: etl::config::PipelineConfig = stream_config.clone().into();
+        let mut pipeline = etl::pipeline::Pipeline::new(pipeline_config, state_store, pgstream);
+
+        pipeline.start().await.expect("Failed to start pipeline");
+
+        let mut slot_created = false;
+        for _ in 0..30 {
+            let slot_exists: bool = sqlx::query_scalar(&format!(
+                "SELECT EXISTS(SELECT 1 FROM pg_replication_slots WHERE slot_name = '{slot_name}')"
+            ))
+            .fetch_one(&db.pool)
+            .await
+            .unwrap();
+
+            if slot_exists {
+                slot_created = true;
+                break;
+            }
+
+            tokio::time::sleep(Duration::from_millis(500)).await;
+        }
+
+        assert!(slot_created, "Replication slot should be created");
+
+        let shutdown_tx = pipeline.shutdown_tx();
+        shutdown_tx
+            .shutdown()
+            .expect("Failed to send shutdown signal");
+        pipeline.wait().await.expect("Failed to wait for pipeline");
+    }
+
+    // Generate events after slot creation so LSN-derived recovery checkpoint would move forward.
+    for i in 0..5 {
+        sqlx::query(
+            "INSERT INTO pgstream.events (id, payload, stream_id, created_at, lsn)
+             VALUES (gen_random_uuid(), $1, $2, now(), pg_current_wal_lsn())",
+        )
+        .bind(serde_json::json!({"after_slot_created": i}))
+        .bind(pipeline_id as i64)
+        .execute(&db.pool)
+        .await
+        .unwrap();
+    }
+
+    sqlx::query(
+        "UPDATE pgstream.streams
+         SET failover_checkpoint_id = $1, failover_checkpoint_ts = $2
+         WHERE id = $3",
+    )
+    .bind(&existing_checkpoint.0)
+    .bind(existing_checkpoint.1)
+    .bind(pipeline_id as i64)
+    .execute(&db.pool)
+    .await
+    .expect("Should set existing failover checkpoint");
+
+    // Invalidate the slot.
+    sqlx::query("alter system set max_slot_wal_keep_size = '1MB'")
+        .execute(&db.pool)
+        .await
+        .unwrap();
+    sqlx::query("select pg_reload_conf()")
+        .execute(&db.pool)
+        .await
+        .unwrap();
+
+    sqlx::query("create table wal_bloat (id serial, data bytea)")
+        .execute(&db.pool)
+        .await
+        .unwrap();
+
+    for batch in 0..50 {
+        for _ in 0..10 {
+            sqlx::query("insert into wal_bloat (data) select decode(repeat('ab', 50000), 'hex') from generate_series(1, 10)")
+                .execute(&db.pool)
+                .await
+                .unwrap();
+        }
+
+        if batch % 10 == 9 {
+            let _: Option<String> = sqlx::query_scalar("select pg_switch_wal()::text")
+                .fetch_one(&db.pool)
+                .await
+                .unwrap();
+            sqlx::query("checkpoint").execute(&db.pool).await.unwrap();
+        }
+    }
+
+    let _: Option<String> = sqlx::query_scalar("select pg_switch_wal()::text")
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+    sqlx::query("checkpoint").execute(&db.pool).await.unwrap();
+
+    let wal_status: String = sqlx::query_scalar(&format!(
+        "SELECT wal_status FROM pg_replication_slots WHERE slot_name = '{slot_name}'"
+    ))
+    .fetch_one(&db.pool)
+    .await
+    .unwrap();
+    assert_eq!(wal_status, "lost", "Slot should be invalidated");
+
+    let confirmed_lsn: Option<String> = sqlx::query_scalar(&format!(
+        "SELECT confirmed_flush_lsn::text FROM pg_replication_slots WHERE slot_name = '{slot_name}'"
+    ))
+    .fetch_one(&db.pool)
+    .await
+    .unwrap();
+
+    let confirmed_lsn = confirmed_lsn.expect("confirmed_flush_lsn should be present");
+
+    let lsn_checkpoint: Option<(String, chrono::DateTime<chrono::Utc>)> = sqlx::query_as(
+        "SELECT id::text, created_at FROM pgstream.events
+         WHERE lsn > $1::pg_lsn AND stream_id = $2
+         ORDER BY created_at, id LIMIT 1",
+    )
+    .bind(&confirmed_lsn)
+    .bind(pipeline_id as i64)
+    .fetch_optional(&db.pool)
+    .await
+    .expect("Should resolve LSN-based checkpoint");
+
+    assert!(
+        lsn_checkpoint.is_some(),
+        "Recovery should have an LSN-derived checkpoint candidate"
+    );
+    assert_ne!(
+        lsn_checkpoint.unwrap().0,
+        existing_checkpoint.0,
+        "LSN-derived checkpoint must differ from existing failover checkpoint"
+    );
+
+    // Reset system setting before recovery so subsequent tests remain isolated.
+    sqlx::query("alter system reset max_slot_wal_keep_size")
+        .execute(&db.pool)
+        .await
+        .unwrap();
+    sqlx::query("select pg_reload_conf()")
+        .execute(&db.pool)
+        .await
+        .unwrap();
+
+    handle_slot_recovery(&db.pool, pipeline_id)
+        .await
+        .expect("Slot recovery should succeed");
+
+    let recovered_checkpoint: (Option<String>, Option<chrono::DateTime<chrono::Utc>>) =
+        sqlx::query_as(
+            "SELECT failover_checkpoint_id, failover_checkpoint_ts FROM pgstream.streams WHERE id = $1",
+        )
+        .bind(pipeline_id as i64)
+        .fetch_one(&db.pool)
+        .await
+        .expect("Should find stream row");
+
+    assert_eq!(
+        recovered_checkpoint.0,
+        Some(existing_checkpoint.0.clone()),
+        "Recovery must preserve the existing failover checkpoint id"
+    );
+    assert_eq!(
+        recovered_checkpoint
+            .1
+            .expect("Checkpoint timestamp should be present")
+            .timestamp_micros(),
+        existing_checkpoint.1.timestamp_micros(),
+        "Recovery must preserve the existing failover checkpoint timestamp"
+    );
+}

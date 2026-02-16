@@ -24,6 +24,32 @@ use tracing::{info, warn};
 
 use crate::types::SlotName;
 
+type Checkpoint = (String, DateTime<Utc>);
+
+#[must_use]
+fn checkpoint_is_earlier(a: &Checkpoint, b: &Checkpoint) -> bool {
+    a.1 < b.1 || (a.1 == b.1 && a.0 < b.0)
+}
+
+#[must_use]
+fn select_recovery_checkpoint(
+    existing_checkpoint: Option<Checkpoint>,
+    lsn_checkpoint: Option<Checkpoint>,
+) -> Option<Checkpoint> {
+    match (existing_checkpoint, lsn_checkpoint) {
+        (Some(existing), Some(from_lsn)) => {
+            if checkpoint_is_earlier(&existing, &from_lsn) {
+                Some(existing)
+            } else {
+                Some(from_lsn)
+            }
+        }
+        (Some(existing), None) => Some(existing),
+        (None, Some(from_lsn)) => Some(from_lsn),
+        (None, None) => None,
+    }
+}
+
 /// Checks if an error indicates a replication slot has been invalidated.
 ///
 /// Postgres returns error code 55000 (OBJECT_NOT_IN_PREREQUISITE_STATE) with the message
@@ -66,6 +92,24 @@ pub async fn handle_slot_recovery(pool: &PgPool, stream_id: u64) -> EtlResult<()
     // Start a transaction for the checkpoint update
     let mut tx = pool.begin().await?;
 
+    // Preserve an existing failover checkpoint if we are already in failover mode.
+    let existing_checkpoint_row: Option<(Option<String>, Option<DateTime<Utc>>)> = sqlx::query_as(
+        "SELECT failover_checkpoint_id, failover_checkpoint_ts FROM pgstream.streams WHERE id = $1",
+    )
+    .bind(stream_id as i64)
+    .fetch_optional(&mut *tx)
+    .await?;
+
+    let existing_checkpoint = existing_checkpoint_row.and_then(|(id, ts)| id.zip(ts));
+
+    if let Some((id, created_at)) = &existing_checkpoint {
+        info!(
+            event_id = %id,
+            event_created_at = %created_at,
+            "existing failover checkpoint found"
+        );
+    }
+
     // 1. Get confirmed_flush_lsn BEFORE dropping the slot
     let confirmed_lsn: Option<String> = sqlx::query_scalar(
         "SELECT confirmed_flush_lsn::text FROM pg_replication_slots WHERE slot_name = $1",
@@ -91,7 +135,7 @@ pub async fn handle_slot_recovery(pool: &PgPool, stream_id: u64) -> EtlResult<()
     );
 
     // 2. Find the first event after the confirmed LSN
-    let checkpoint: Option<(String, DateTime<Utc>)> = sqlx::query_as(
+    let lsn_checkpoint: Option<Checkpoint> = sqlx::query_as(
         "SELECT id::text, created_at FROM pgstream.events
          WHERE lsn > $1::pg_lsn AND stream_id = $2
          ORDER BY created_at, id LIMIT 1",
@@ -101,8 +145,23 @@ pub async fn handle_slot_recovery(pool: &PgPool, stream_id: u64) -> EtlResult<()
     .fetch_optional(&mut *tx)
     .await?;
 
-    // 3. Set failover checkpoint BEFORE dropping slot (crash-safe ordering)
-    if let Some((id, created_at)) = checkpoint {
+    // 3. Choose the earliest safe checkpoint.
+    // If we are already in failover mode, keep the existing checkpoint unless
+    // the LSN-derived checkpoint is earlier.
+    let checkpoint = select_recovery_checkpoint(existing_checkpoint.clone(), lsn_checkpoint);
+
+    // 4. Set failover checkpoint BEFORE dropping slot (crash-safe ordering)
+    if checkpoint == existing_checkpoint {
+        if let Some((id, created_at)) = checkpoint {
+            info!(
+                event_id = %id,
+                event_created_at = %created_at,
+                "preserving existing failover checkpoint during slot recovery"
+            );
+        } else {
+            info!("no events found after confirmed_flush_lsn, pipeline will start fresh");
+        }
+    } else if let Some((id, created_at)) = checkpoint {
         info!(
             event_id = %id,
             event_created_at = %created_at,
@@ -124,7 +183,7 @@ pub async fn handle_slot_recovery(pool: &PgPool, stream_id: u64) -> EtlResult<()
         info!("no events found after confirmed_flush_lsn, pipeline will start fresh");
     }
 
-    // 4. Delete ETL replication state so ETL will create a fresh slot on restart
+    // 5. Delete ETL replication state so ETL will create a fresh slot on restart
     // This triggers DataSync, but we skip it by returning Ok(()) from write_table_rows.
     // The failover checkpoint ensures we COPY missed events when replication starts.
     let deleted = sqlx::query("DELETE FROM etl.replication_state WHERE pipeline_id = $1")
@@ -137,10 +196,10 @@ pub async fn handle_slot_recovery(pool: &PgPool, stream_id: u64) -> EtlResult<()
         "deleted ETL replication state to trigger fresh slot creation"
     );
 
-    // 5. Commit the transaction - checkpoint is now durable
+    // 6. Commit the transaction - checkpoint is now durable
     tx.commit().await?;
 
-    // 6. Drop the invalidated slot AFTER commit (non-transactional operation)
+    // 7. Drop the invalidated slot AFTER commit (non-transactional operation)
     // This ordering ensures crash safety: if we crash here, the checkpoint is
     // already saved, and the next recovery attempt will simply drop the slot.
     let drop_result = sqlx::query("SELECT pg_drop_replication_slot($1)")
@@ -164,6 +223,7 @@ pub async fn handle_slot_recovery(pool: &PgPool, stream_id: u64) -> EtlResult<()
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::TimeZone;
 
     #[test]
     fn test_is_slot_invalidation_error_matches() {
@@ -205,5 +265,43 @@ mod tests {
     fn test_is_slot_invalidation_error_no_match() {
         let error = etl::etl_error!(etl::error::ErrorKind::InvalidState, "connection refused");
         assert!(!is_slot_invalidation_error(&error));
+    }
+
+    #[test]
+    fn test_select_recovery_checkpoint_prefers_earlier_existing_checkpoint() {
+        let ts = Utc.with_ymd_and_hms(2024, 3, 15, 12, 0, 0).unwrap();
+        let existing = Some(("00000000-0000-0000-0000-000000000001".to_string(), ts));
+        let from_lsn = Some((
+            "00000000-0000-0000-0000-000000000002".to_string(),
+            ts + chrono::Duration::seconds(1),
+        ));
+
+        assert_eq!(
+            select_recovery_checkpoint(existing.clone(), from_lsn),
+            existing
+        );
+    }
+
+    #[test]
+    fn test_select_recovery_checkpoint_prefers_earlier_lsn_checkpoint() {
+        let ts = Utc.with_ymd_and_hms(2024, 3, 15, 12, 0, 0).unwrap();
+        let existing = Some((
+            "00000000-0000-0000-0000-000000000002".to_string(),
+            ts + chrono::Duration::seconds(1),
+        ));
+        let from_lsn = Some(("00000000-0000-0000-0000-000000000001".to_string(), ts));
+
+        assert_eq!(
+            select_recovery_checkpoint(existing, from_lsn.clone()),
+            from_lsn
+        );
+    }
+
+    #[test]
+    fn test_select_recovery_checkpoint_uses_existing_when_lsn_checkpoint_missing() {
+        let ts = Utc.with_ymd_and_hms(2024, 3, 15, 12, 0, 0).unwrap();
+        let existing = Some(("00000000-0000-0000-0000-000000000001".to_string(), ts));
+
+        assert_eq!(select_recovery_checkpoint(existing.clone(), None), existing);
     }
 }

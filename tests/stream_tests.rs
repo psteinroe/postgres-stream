@@ -9,6 +9,7 @@ use postgres_stream::test_utils::{
     insert_events_to_db, make_event_with_id, make_test_event, test_stream_config,
 };
 use postgres_stream::types::{StreamStatus, TriggeredEvent};
+use std::time::Duration as StdDuration;
 
 // Basic stream tests
 
@@ -419,6 +420,70 @@ async fn test_failover_large_gap_recovery() {
     assert!(
         matches!(status, StreamStatus::Healthy),
         "Stream should recover to Healthy after large gap"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_failover_recovery_does_not_hang_when_replay_exceeds_batch_size() {
+    let db = TestDatabase::spawn().await;
+    let config = test_stream_config(&db);
+    let sink = FailableSink::new();
+    let (store, table_id) =
+        create_postgres_store_with_table_id(config.id, &db.config, &db.pool).await;
+
+    let stream: PgStream<FailableSink, PostgresStore> =
+        PgStream::create(config.clone(), sink.clone(), store.clone())
+            .await
+            .expect("Failed to create PgStream");
+
+    // 250 events ensure replay window is larger than batch.max_size (100).
+    let event_ids = insert_events_to_db(&db, 250).await;
+
+    // Event 0 succeeds.
+    sink.succeed_always();
+    stream
+        .write_events(vec![make_event_with_id(
+            table_id,
+            event_ids.first().expect("Should have event 0"),
+            serde_json::json!({"seq": 1}),
+        )])
+        .await
+        .unwrap();
+
+    // Event 1 fails, entering failover mode.
+    sink.fail_on_call(1);
+    stream
+        .write_events(vec![make_event_with_id(
+            table_id,
+            event_ids.get(1).expect("Should have event 1"),
+            serde_json::json!({"seq": 2}),
+        )])
+        .await
+        .unwrap();
+
+    // Event 249 should trigger failover replay with a gap > batch size.
+    sink.succeed_always();
+    let recovery_result = tokio::time::timeout(
+        StdDuration::from_secs(20),
+        stream.write_events(vec![make_event_with_id(
+            table_id,
+            event_ids.get(249).expect("Should have event 249"),
+            serde_json::json!({"seq": 250}),
+        )]),
+    )
+    .await;
+
+    assert!(
+        recovery_result.is_ok(),
+        "Failover recovery should not hang when replay exceeds batch size"
+    );
+    recovery_result.unwrap().unwrap();
+
+    let stream_store = StreamStore::create(config, store).await.unwrap();
+    let (status, _) = stream_store.get_stream_state().await.unwrap();
+    assert!(
+        matches!(status, StreamStatus::Healthy),
+        "Stream should return to Healthy after large replay recovery"
     );
 }
 
