@@ -103,16 +103,31 @@ where
 
         let result = self.sink.publish_events(events).await;
         if result.is_err() {
-            info!(
-                "Publishing events failed, entering failover at checkpoint event id: {:?}",
-                checkpoint_id
-            );
-            metrics::record_failover_entered(self.config.id);
-            self.store
-                .store_stream_status(StreamStatus::Failover {
-                    checkpoint_event_id: checkpoint_id,
-                })
-                .await?;
+            let (current_status, _) = self.store.get_stream_state().await?;
+
+            match current_status {
+                StreamStatus::Healthy => {
+                    info!(
+                        "Publishing events failed, entering failover at checkpoint event id: {:?}",
+                        checkpoint_id
+                    );
+                    metrics::record_failover_entered(self.config.id);
+                    self.store
+                        .store_stream_status(StreamStatus::Failover {
+                            checkpoint_event_id: checkpoint_id,
+                        })
+                        .await?;
+                }
+                StreamStatus::Failover {
+                    checkpoint_event_id,
+                } => {
+                    info!(
+                        "Publishing events failed while already in failover, preserving checkpoint event id: {:?}",
+                        checkpoint_event_id
+                    );
+                }
+            }
+
             return Ok(());
         }
 

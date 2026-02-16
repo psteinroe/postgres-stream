@@ -286,6 +286,68 @@ async fn test_get_events_copy_stream_boundary_conditions() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn test_update_checkpoint_while_copy_stream_active() {
+    let db = TestDatabase::spawn().await;
+    db.ensure_today_partition().await;
+
+    // Ensure stream row exists for checkpoint updates.
+    sqlx::query("insert into pgstream.streams (id, next_maintenance_at) values (1, now())")
+        .execute(&db.pool)
+        .await
+        .unwrap();
+
+    let client = ReplayClient::connect(1, db.config.clone())
+        .await
+        .expect("Failed to connect");
+
+    // Insert enough events so COPY remains active after reading first batch.
+    let events = insert_events_to_db(&db, 250).await;
+
+    let config = test_stream_config(&db);
+    let store_backend = create_postgres_store(config.id, &db.config, &db.pool).await;
+    let store = StreamStore::create(config, store_backend).await.unwrap();
+    let table_schema = store.get_events_table_schema().await.unwrap();
+
+    // Keep COPY active by only partially consuming it.
+    use etl::replication::stream::TableCopyStream;
+    use futures::StreamExt;
+    use tokio::pin;
+
+    let stream = client
+        .get_events_copy_stream(
+            events.first().expect("Should have event 0"),
+            events.get(249).expect("Should have event 249"),
+        )
+        .await
+        .expect("Failed to get copy stream");
+
+    let stream = TableCopyStream::wrap(stream, &table_schema.column_schemas, 1);
+    pin!(stream);
+
+    for _ in 0..100 {
+        let row = stream
+            .next()
+            .await
+            .expect("Expected row from copy stream")
+            .expect("Should parse row successfully");
+        drop(row);
+    }
+
+    // Checkpoint update should not block while COPY stream is still active.
+    let checkpoint_update = tokio::time::timeout(
+        std::time::Duration::from_secs(3),
+        client.update_checkpoint(events.get(100).expect("Should have event 100")),
+    )
+    .await;
+
+    assert!(
+        checkpoint_update.is_ok(),
+        "Checkpoint update should not time out while copy stream is active"
+    );
+    checkpoint_update.unwrap().unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn test_get_events_copy_stream_filters_by_stream_id() {
     let db = TestDatabase::spawn().await;
     db.ensure_today_partition().await;

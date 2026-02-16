@@ -2,7 +2,9 @@ use std::io::BufReader;
 use std::num::NonZeroI32;
 use std::sync::Arc;
 
-use etl::config::{ETL_REPLICATION_OPTIONS, IntoConnectOptions, PgConnectionConfig};
+use etl::config::{
+    ETL_REPLICATION_OPTIONS, ETL_STATE_MANAGEMENT_OPTIONS, IntoConnectOptions, PgConnectionConfig,
+};
 use etl::error::EtlResult;
 use etl_postgres::replication::extract_server_version;
 use tokio_postgres::tls::MakeTlsConnect;
@@ -38,7 +40,10 @@ where
 #[derive(Debug, Clone)]
 pub struct ReplayClient {
     stream_id: StreamId,
-    client: Arc<Client>,
+    /// Connection used for COPY streaming of replay events.
+    copy_client: Arc<Client>,
+    /// Separate connection used for checkpoint updates during replay.
+    checkpoint_client: Arc<Client>,
     /// Server version extracted from connection - reserved for future version-specific logic
     #[allow(dead_code)]
     server_version: Option<NonZeroI32>,
@@ -67,22 +72,28 @@ impl ReplayClient {
         stream_id: StreamId,
         pg_connection_config: PgConnectionConfig,
     ) -> EtlResult<Self> {
-        let config: Config = pg_connection_config
+        let copy_config: Config = pg_connection_config
             .clone()
             .with_db(Some(&ETL_REPLICATION_OPTIONS));
 
-        let (client, connection) = config.connect(NoTls).await?;
+        let (copy_client, copy_connection) = copy_config.connect(NoTls).await?;
 
-        let server_version = connection
+        let server_version = copy_connection
             .parameter("server_version")
             .and_then(extract_server_version);
 
-        spawn_postgres_connection::<NoTls>(connection);
+        spawn_postgres_connection::<NoTls>(copy_connection);
+
+        let checkpoint_config: Config =
+            pg_connection_config.with_db(Some(&ETL_STATE_MANAGEMENT_OPTIONS));
+        let (checkpoint_client, checkpoint_connection) = checkpoint_config.connect(NoTls).await?;
+        spawn_postgres_connection::<NoTls>(checkpoint_connection);
 
         info!("successfully connected to postgres without tls");
 
         Ok(ReplayClient {
-            client: Arc::new(client),
+            copy_client: Arc::new(copy_client),
+            checkpoint_client: Arc::new(checkpoint_client),
             server_version,
             stream_id,
         })
@@ -95,7 +106,7 @@ impl ReplayClient {
         stream_id: StreamId,
         pg_connection_config: PgConnectionConfig,
     ) -> EtlResult<Self> {
-        let config: Config = pg_connection_config
+        let copy_config: Config = pg_connection_config
             .clone()
             .with_db(Some(&ETL_REPLICATION_OPTIONS));
 
@@ -113,18 +124,28 @@ impl ReplayClient {
             .with_root_certificates(root_store)
             .with_no_client_auth();
 
-        let (client, connection) = config.connect(MakeRustlsConnect::new(tls_config)).await?;
+        let (copy_client, copy_connection) = copy_config
+            .connect(MakeRustlsConnect::new(tls_config.clone()))
+            .await?;
 
-        let server_version = connection
+        let server_version = copy_connection
             .parameter("server_version")
             .and_then(extract_server_version);
 
-        spawn_postgres_connection::<MakeRustlsConnect>(connection);
+        spawn_postgres_connection::<MakeRustlsConnect>(copy_connection);
+
+        let checkpoint_config: Config =
+            pg_connection_config.with_db(Some(&ETL_STATE_MANAGEMENT_OPTIONS));
+        let (checkpoint_client, checkpoint_connection) = checkpoint_config
+            .connect(MakeRustlsConnect::new(tls_config))
+            .await?;
+        spawn_postgres_connection::<MakeRustlsConnect>(checkpoint_connection);
 
         info!("successfully connected to postgres with tls");
 
         Ok(ReplayClient {
-            client: Arc::new(client),
+            copy_client: Arc::new(copy_client),
+            checkpoint_client: Arc::new(checkpoint_client),
             server_version,
             stream_id,
         })
@@ -133,7 +154,7 @@ impl ReplayClient {
     /// Checks if the underlying connection is closed.
     #[must_use]
     pub fn is_closed(&self) -> bool {
-        self.client.is_closed()
+        self.copy_client.is_closed() || self.checkpoint_client.is_closed()
     }
 
     /// Gets events between two checkpoints (exclusive on both ends).
@@ -150,12 +171,13 @@ impl ReplayClient {
                   where (created_at, id) > ('{}'::timestamptz, '{}'::uuid)
                     and (created_at, id) < ('{}'::timestamptz, '{}'::uuid)
                     and stream_id = {}
+                  order by created_at, id
                 ) to stdout with (format text);
             "#,
             from.created_at, from.id, to.created_at, to.id, self.stream_id as i64
         );
 
-        let stream = self.client.copy_out_simple(&copy_query).await?;
+        let stream = self.copy_client.copy_out_simple(&copy_query).await?;
 
         Ok(stream)
     }
@@ -164,7 +186,7 @@ impl ReplayClient {
     ///
     /// This is duplicated from the [`StreamStore`] because we want to use a persistent connection during failover.
     pub async fn update_checkpoint(&self, checkpoint: &EventIdentifier) -> EtlResult<()> {
-        self.client
+        self.checkpoint_client
             .execute(
                 r#"
             update pgstream.streams
