@@ -1,5 +1,5 @@
 use ctor::dtor;
-use etl::config::{PgConnectionConfig, TlsConfig};
+use etl::config::{PgConnectionConfig, TcpKeepaliveConfig, TlsConfig};
 use std::sync::{Mutex, OnceLock};
 use testcontainers::{ContainerRequest, ImageExt, runners::SyncRunner};
 use testcontainers_modules::elastic_search::ElasticSearch;
@@ -202,7 +202,7 @@ pub async fn test_pg_config() -> PgConnectionConfig {
             trusted_root_certs: "".into(),
             enabled: false,
         },
-        keepalive: None,
+        keepalive: TcpKeepaliveConfig::default(),
     }
 }
 

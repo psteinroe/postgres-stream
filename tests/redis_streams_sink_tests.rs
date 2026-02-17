@@ -1,3 +1,4 @@
+#![allow(clippy::indexing_slicing)]
 //! Integration tests for the Redis Streams sink.
 
 #![cfg(feature = "sink-redis-streams")]

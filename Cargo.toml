@@ -54,8 +54,8 @@ tracing = { version = "0.1.41", default-features = false }
 tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "env-filter"] }
 x509-cert = { version = "0.2.2", default-features = false }
 
-etl          = { git = "https://github.com/supabase/etl", rev = "6f5de864570ac9e53fe31a87ca5f46361e3f4e0d" }
-etl-postgres = { git = "https://github.com/supabase/etl", rev = "6f5de864570ac9e53fe31a87ca5f46361e3f4e0d" }
+etl          = { git = "https://github.com/supabase/etl", rev = "3122cb1c8df9649e9caaa4ee9d89e1611df29baf" }
+etl-postgres = { git = "https://github.com/supabase/etl", rev = "3122cb1c8df9649e9caaa4ee9d89e1611df29baf" }
 uuid         = { version = "1.19.0", default-features = false, features = ["v4"] }
 
 # Optional sink dependencies.

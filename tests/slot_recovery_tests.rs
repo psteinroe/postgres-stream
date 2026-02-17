@@ -11,8 +11,9 @@ use std::time::Duration;
 
 use etl::store::both::postgres::PostgresStore;
 use postgres_stream::migrations::migrate_etl;
+use postgres_stream::queries::{SlotState, get_slot_state};
 use postgres_stream::sink::memory::MemorySink;
-use postgres_stream::slot_recovery::{handle_slot_recovery, is_slot_invalidation_error};
+use postgres_stream::slot_recovery::handle_slot_recovery;
 use postgres_stream::stream::PgStream;
 use postgres_stream::test_utils::{
     TestDatabase, acquire_exclusive_test_lock, test_stream_config_with_id, unique_pipeline_id,
@@ -220,9 +221,13 @@ async fn test_start_with_inactive_invalidated_slot_triggers_recovery() {
         Err(e) => e,
     };
 
+    // Verify the slot is in invalidated state (mirrors core.rs recovery logic)
+    let state = get_slot_state(&db.pool, &slot_name)
+        .await
+        .expect("Should query slot state");
     assert!(
-        is_slot_invalidation_error(&slot_error),
-        "Expected slot invalidation error, got: {slot_error}"
+        matches!(state, Some(SlotState::Invalidated)),
+        "Expected slot to be invalidated, got: {state:?}, pipeline error: {slot_error}"
     );
 
     // Simulate the startup recovery loop trigger path from core.rs.

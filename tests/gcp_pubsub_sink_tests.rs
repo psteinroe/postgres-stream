@@ -1,3 +1,4 @@
+#![allow(clippy::indexing_slicing)]
 //! Integration tests for GCP Pub/Sub sink.
 //!
 //! Uses GCP Cloud SDK emulator to test Pub/Sub message publishing.
@@ -33,8 +34,10 @@ async fn create_pubsub_client(emulator_host: &str, project_id: &str) -> Client {
         std::env::set_var("PUBSUB_EMULATOR_HOST", emulator_host);
     }
 
-    let mut config = ClientConfig::default();
-    config.project_id = Some(project_id.to_string());
+    let config = ClientConfig {
+        project_id: Some(project_id.to_string()),
+        ..ClientConfig::default()
+    };
 
     Client::new(config)
         .await

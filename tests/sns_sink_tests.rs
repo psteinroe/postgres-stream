@@ -1,3 +1,4 @@
+#![allow(clippy::indexing_slicing)]
 //! Integration tests for AWS SNS sink.
 //!
 //! Uses LocalStack container to test SNS message publishing.

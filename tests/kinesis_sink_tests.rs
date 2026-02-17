@@ -1,3 +1,4 @@
+#![allow(clippy::indexing_slicing)]
 //! Integration tests for AWS Kinesis sink.
 //!
 //! Uses LocalStack container to test Kinesis record publishing.

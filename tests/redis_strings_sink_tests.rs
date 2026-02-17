@@ -1,3 +1,4 @@
+#![allow(clippy::indexing_slicing)]
 //! Integration tests for the Redis Strings sink.
 
 #![cfg(feature = "sink-redis-strings")]

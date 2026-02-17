@@ -91,6 +91,32 @@ pub async fn upsert_stream_maintenance(
     Ok(())
 }
 
+#[derive(Debug)]
+pub enum SlotState {
+    Active,
+    Inactive,
+    Invalidated,
+}
+
+/// Returns `None` if the slot doesn't exist.
+pub async fn get_slot_state(pool: &PgPool, slot_name: &str) -> sqlx::Result<Option<SlotState>> {
+    let row: Option<(bool, Option<String>)> =
+        sqlx::query_as("SELECT active, wal_status FROM pg_replication_slots WHERE slot_name = $1")
+            .bind(slot_name)
+            .fetch_optional(pool)
+            .await?;
+
+    Ok(row.map(|(active, wal_status)| {
+        if wal_status.as_deref() == Some("lost") {
+            SlotState::Invalidated
+        } else if active {
+            SlotState::Active
+        } else {
+            SlotState::Inactive
+        }
+    }))
+}
+
 pub async fn insert_stream_state(
     pool: &PgPool,
     stream_id: i64,

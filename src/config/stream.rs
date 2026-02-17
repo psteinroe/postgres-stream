@@ -1,6 +1,6 @@
 use etl::config::{
-    BatchConfig, PgConnectionConfig, PgConnectionConfigWithoutSecrets, PipelineConfig,
-    TableSyncCopyConfig,
+    BatchConfig, InvalidatedSlotBehavior, PgConnectionConfig, PgConnectionConfigWithoutSecrets,
+    PipelineConfig, TableSyncCopyConfig,
 };
 use serde::{Deserialize, Serialize};
 
@@ -67,6 +67,10 @@ impl From<StreamConfig> for PipelineConfig {
             table_error_retry_delay_ms: 1000,
             table_error_retry_max_attempts: 5,
             table_sync_copy: TableSyncCopyConfig::default(),
+            // single table, serial copy is fine
+            max_copy_connections_per_table: 1,
+            // we handle recovery ourselves with checkpoint preservation
+            invalidated_slot_behavior: InvalidatedSlotBehavior::Error,
         }
     }
 }

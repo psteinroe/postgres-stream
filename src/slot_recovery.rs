@@ -2,8 +2,7 @@
 //!
 //! When a Postgres replication slot is invalidated (WAL exceeded `max_slot_wal_keep_size`),
 //! this module provides functionality to:
-//! 1. Detect the slot invalidation error
-//! 2. Query the `confirmed_flush_lsn` from the invalidated slot
+//! 1. Query the `confirmed_flush_lsn` from the invalidated slot
 //! 3. Find the first event after that LSN
 //! 4. Set a failover checkpoint to trigger event replay
 //! 5. Delete ETL replication state (triggers fresh slot creation)
@@ -18,7 +17,7 @@
 //! the checkpoint persists and will be used on restart regardless of slot state.
 
 use chrono::{DateTime, Utc};
-use etl::error::{EtlError, EtlResult};
+use etl::error::EtlResult;
 use sqlx::PgPool;
 use tracing::{info, warn};
 
@@ -48,19 +47,6 @@ fn select_recovery_checkpoint(
         (None, Some(from_lsn)) => Some(from_lsn),
         (None, None) => None,
     }
-}
-
-/// Checks if an error indicates a replication slot has been invalidated.
-///
-/// Postgres returns error code 55000 (OBJECT_NOT_IN_PREREQUISITE_STATE) with the message
-/// "can no longer get changes from replication slot" or
-/// "cannot read from logical replication slot" when a slot is invalidated.
-#[must_use]
-pub fn is_slot_invalidation_error(error: &EtlError) -> bool {
-    let msg = error.to_string().to_lowercase();
-    msg.contains("can no longer get changes from replication slot")
-        || msg.contains("cannot read from logical replication slot")
-        || msg.contains("has been invalidated because it exceeded the maximum reserved size")
 }
 
 /// Handles recovery from an invalidated replication slot.
@@ -224,48 +210,6 @@ pub async fn handle_slot_recovery(pool: &PgPool, stream_id: u64) -> EtlResult<()
 mod tests {
     use super::*;
     use chrono::TimeZone;
-
-    #[test]
-    fn test_is_slot_invalidation_error_matches() {
-        let error = etl::etl_error!(
-            etl::error::ErrorKind::InvalidState,
-            "can no longer get changes from replication slot \"test_slot\""
-        );
-        assert!(is_slot_invalidation_error(&error));
-    }
-
-    #[test]
-    fn test_is_slot_invalidation_error_case_insensitive() {
-        let error = etl::etl_error!(
-            etl::error::ErrorKind::InvalidState,
-            "CAN NO LONGER GET CHANGES FROM REPLICATION SLOT \"test_slot\""
-        );
-        assert!(is_slot_invalidation_error(&error));
-    }
-
-    #[test]
-    fn test_is_slot_invalidation_error_logical_slot_read_message() {
-        let error = etl::etl_error!(
-            etl::error::ErrorKind::InvalidState,
-            "db error: ERROR: cannot read from logical replication slot \"test_slot\""
-        );
-        assert!(is_slot_invalidation_error(&error));
-    }
-
-    #[test]
-    fn test_is_slot_invalidation_error_maximum_reserved_size_message() {
-        let error = etl::etl_error!(
-            etl::error::ErrorKind::InvalidState,
-            "DETAIL: This slot has been invalidated because it exceeded the maximum reserved size"
-        );
-        assert!(is_slot_invalidation_error(&error));
-    }
-
-    #[test]
-    fn test_is_slot_invalidation_error_no_match() {
-        let error = etl::etl_error!(etl::error::ErrorKind::InvalidState, "connection refused");
-        assert!(!is_slot_invalidation_error(&error));
-    }
 
     #[test]
     fn test_select_recovery_checkpoint_prefers_earlier_existing_checkpoint() {
