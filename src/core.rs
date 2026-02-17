@@ -5,9 +5,11 @@
 use crate::{
     config::{PipelineConfig, SinkConfig},
     migrations::migrate_etl,
+    queries::get_slot_state,
     sink::{AnySink, memory::MemorySink},
-    slot_recovery::{handle_slot_recovery, is_slot_invalidation_error},
+    slot_recovery::handle_slot_recovery,
     stream::PgStream,
+    types::SlotName,
 };
 use etl::config::{ETL_REPLICATION_OPTIONS, IntoConnectOptions};
 use etl::error::EtlResult;
@@ -42,28 +44,30 @@ pub async fn start_pipeline_with_config(config: PipelineConfig) -> EtlResult<()>
                 info!("pgstream daemon completed");
                 return Ok(());
             }
-            Err(e) if is_slot_invalidation_error(&e) => {
-                warn!(error = %e, "replication slot invalidated, attempting recovery");
-
+            Err(e) => {
                 let pool = PgPoolOptions::new()
                     .max_connections(1)
                     .connect_with(
                         config
                             .stream
                             .pg_connection
-                            // we use replication options without timeouts because the events query can take a while
                             .with_db(Some(&ETL_REPLICATION_OPTIONS)),
                     )
                     .await?;
 
-                if let Err(recovery_err) = handle_slot_recovery(&pool, config.stream.id).await {
-                    error!(error = %recovery_err, "slot recovery failed");
+                let state = get_slot_state(&pool, &config.stream.id.slot_name()).await?;
+
+                if state.is_some_and(|s| s.is_invalidated()) {
+                    warn!(error = %e, "replication slot invalidated, attempting recovery");
+
+                    if let Err(recovery_err) = handle_slot_recovery(&pool, config.stream.id).await {
+                        error!(error = %recovery_err, "slot recovery failed");
+                        return Err(e);
+                    }
+                    // Loop continues to restart the pipeline
+                } else {
                     return Err(e);
                 }
-                // Loop continues to restart the pipeline
-            }
-            Err(e) => {
-                return Err(e);
             }
         }
     }

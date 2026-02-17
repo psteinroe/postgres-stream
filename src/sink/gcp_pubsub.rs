@@ -105,8 +105,10 @@ impl GcpPubsubSink {
         config: GcpPubsubSinkConfig,
     ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         // Build client config.
-        let mut client_config = ClientConfig::default();
-        client_config.project_id = Some(config.project_id.clone());
+        let client_config = ClientConfig {
+            project_id: Some(config.project_id.clone()),
+            ..ClientConfig::default()
+        };
 
         let client = Client::new(client_config).await?;
 

@@ -1,3 +1,4 @@
+#![allow(clippy::indexing_slicing)]
 //! Integration tests for Meilisearch sink.
 //!
 //! Uses Meilisearch testcontainer to test document indexing.

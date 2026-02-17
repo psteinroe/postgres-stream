@@ -1,3 +1,4 @@
+#![allow(clippy::indexing_slicing)]
 //! Integration tests for Elasticsearch sink.
 //!
 //! Uses Elasticsearch testcontainer to test document indexing.

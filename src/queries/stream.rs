@@ -91,6 +91,69 @@ pub async fn upsert_stream_maintenance(
     Ok(())
 }
 
+/// WAL retention status of a replication slot.
+///
+/// Mirrors the `wal_status` column from `pg_replication_slots`.
+/// See: <https://www.postgresql.org/docs/current/view-pg-replication-slots.html>
+#[derive(Debug, PartialEq, Eq)]
+pub enum WalStatus {
+    /// WAL files are within `max_wal_size`.
+    Reserved,
+    /// `max_wal_size` exceeded but files still retained.
+    Extended,
+    /// Slot no longer retains required WAL; may recover at next checkpoint.
+    Unreserved,
+    /// Slot is no longer usable.
+    Lost,
+    /// Unrecognized value from a newer Postgres version.
+    Unknown(String),
+}
+
+impl WalStatus {
+    fn parse(s: &str) -> Self {
+        match s {
+            "reserved" => Self::Reserved,
+            "extended" => Self::Extended,
+            "unreserved" => Self::Unreserved,
+            "lost" => Self::Lost,
+            other => Self::Unknown(other.to_owned()),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct SlotState {
+    pub active: bool,
+    pub wal_status: WalStatus,
+}
+
+impl SlotState {
+    #[must_use]
+    pub fn is_invalidated(&self) -> bool {
+        self.wal_status == WalStatus::Lost
+    }
+}
+
+impl sqlx::FromRow<'_, sqlx::postgres::PgRow> for SlotState {
+    fn from_row(row: &sqlx::postgres::PgRow) -> sqlx::Result<Self> {
+        use sqlx::Row;
+        let active: bool = row.try_get("active")?;
+        let wal_status: String = row.try_get("wal_status")?;
+        Ok(Self {
+            active,
+            wal_status: WalStatus::parse(&wal_status),
+        })
+    }
+}
+
+/// Returns `None` if the slot doesn't exist.
+pub async fn get_slot_state(pool: &PgPool, slot_name: &str) -> sqlx::Result<Option<SlotState>> {
+    sqlx::query_as("SELECT active, wal_status FROM pg_replication_slots WHERE slot_name = $1")
+        .bind(slot_name)
+        .fetch_optional(pool)
+        .await
+}
+
 pub async fn insert_stream_state(
     pool: &PgPool,
     stream_id: i64,

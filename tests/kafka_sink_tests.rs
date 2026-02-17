@@ -1,3 +1,4 @@
+#![allow(clippy::indexing_slicing)]
 //! Integration tests for the Kafka sink.
 
 #![cfg(feature = "sink-kafka")]

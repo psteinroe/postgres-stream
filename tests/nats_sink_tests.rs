@@ -1,3 +1,4 @@
+#![allow(clippy::indexing_slicing)]
 //! Integration tests for the NATS sink.
 
 #![cfg(feature = "sink-nats")]

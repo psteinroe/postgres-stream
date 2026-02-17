@@ -21,36 +21,20 @@ async fn create_test_table(pool: &PgPool) {
     .expect("Failed to create test table");
 }
 
+#[derive(Default)]
+struct SubscriptionOpts<'a> {
+    when_clause: Option<&'a str>,
+    payload_extensions: Option<serde_json::Value>,
+    metadata: Option<serde_json::Value>,
+    metadata_extensions: Option<serde_json::Value>,
+}
+
 async fn create_subscription(
     pool: &PgPool,
     key: &str,
     stream_id: i64,
     operation: &str,
-    when_clause: Option<&str>,
-    payload_extensions: Option<serde_json::Value>,
-) -> sqlx::types::Uuid {
-    create_subscription_full(
-        pool,
-        key,
-        stream_id,
-        operation,
-        when_clause,
-        payload_extensions,
-        None,
-        None,
-    )
-    .await
-}
-
-async fn create_subscription_full(
-    pool: &PgPool,
-    key: &str,
-    stream_id: i64,
-    operation: &str,
-    when_clause: Option<&str>,
-    payload_extensions: Option<serde_json::Value>,
-    metadata: Option<serde_json::Value>,
-    metadata_extensions: Option<serde_json::Value>,
+    opts: SubscriptionOpts<'_>,
 ) -> sqlx::types::Uuid {
     let row = sqlx::query(
         r#"
@@ -63,10 +47,10 @@ async fn create_subscription_full(
     .bind(key)
     .bind(stream_id)
     .bind(operation)
-    .bind(when_clause)
-    .bind(payload_extensions.unwrap_or(serde_json::json!([])))
-    .bind(metadata)
-    .bind(metadata_extensions.unwrap_or(serde_json::json!([])))
+    .bind(opts.when_clause)
+    .bind(opts.payload_extensions.unwrap_or(serde_json::json!([])))
+    .bind(opts.metadata)
+    .bind(opts.metadata_extensions.unwrap_or(serde_json::json!([])))
     .fetch_one(pool)
     .await
     .expect("Failed to create subscription");
@@ -156,7 +140,7 @@ async fn test_subscription_creates_triggers_and_events() {
     create_test_table(&db.pool).await;
 
     // Create subscription for INSERT operations
-    create_subscription(&db.pool, "user_created", 1, "INSERT", None, None).await;
+    create_subscription(&db.pool, "user_created", 1, "INSERT", Default::default()).await;
 
     // Insert a record
     sqlx::query(
@@ -197,8 +181,10 @@ async fn test_subscription_with_when_clause() {
         "adult_user_created",
         2,
         "INSERT",
-        Some("new.age >= 18"),
-        None,
+        SubscriptionOpts {
+            when_clause: Some("new.age >= 18"),
+            ..Default::default()
+        },
     )
     .await;
 
@@ -241,7 +227,7 @@ async fn test_update_operation() {
     create_test_table(&db.pool).await;
 
     // Create subscription for UPDATE operations
-    create_subscription(&db.pool, "user_updated", 3, "UPDATE", None, None).await;
+    create_subscription(&db.pool, "user_updated", 3, "UPDATE", Default::default()).await;
 
     // Insert a user first
     sqlx::query(
@@ -286,7 +272,7 @@ async fn test_delete_operation() {
     create_test_table(&db.pool).await;
 
     // Create subscription for DELETE operations
-    create_subscription(&db.pool, "user_deleted", 4, "DELETE", None, None).await;
+    create_subscription(&db.pool, "user_deleted", 4, "DELETE", Default::default()).await;
 
     // Insert a user first
     sqlx::query(
@@ -346,8 +332,10 @@ async fn test_payload_extensions() {
         "user_with_extensions",
         5,
         "INSERT",
-        None,
-        Some(payload_extensions.clone()),
+        SubscriptionOpts {
+            payload_extensions: Some(payload_extensions.clone()),
+            ..Default::default()
+        },
     )
     .await;
 
@@ -413,8 +401,10 @@ async fn test_multiple_subscriptions_same_stream() {
         "young_user",
         6,
         "INSERT",
-        Some("new.age < 30"),
-        None,
+        SubscriptionOpts {
+            when_clause: Some("new.age < 30"),
+            ..Default::default()
+        },
     )
     .await;
     create_subscription(
@@ -422,8 +412,10 @@ async fn test_multiple_subscriptions_same_stream() {
         "old_user",
         6,
         "INSERT",
-        Some("new.age >= 30"),
-        None,
+        SubscriptionOpts {
+            when_clause: Some("new.age >= 30"),
+            ..Default::default()
+        },
     )
     .await;
 
@@ -472,8 +464,14 @@ async fn test_subscription_deletion_removes_trigger() {
     create_test_table(&db.pool).await;
 
     // Create subscription
-    let subscription_id =
-        create_subscription(&db.pool, "temp_subscription", 7, "INSERT", None, None).await;
+    let subscription_id = create_subscription(
+        &db.pool,
+        "temp_subscription",
+        7,
+        "INSERT",
+        Default::default(),
+    )
+    .await;
 
     // Insert a user (should create event)
     sqlx::query(
@@ -526,7 +524,7 @@ async fn test_events_have_lsn_captured() {
     create_test_table(&db.pool).await;
 
     // Create subscription
-    create_subscription(&db.pool, "user_with_lsn", 8, "INSERT", None, None).await;
+    create_subscription(&db.pool, "user_with_lsn", 8, "INSERT", Default::default()).await;
 
     // Insert multiple users
     for i in 0..3 {
@@ -583,7 +581,7 @@ async fn test_lsn_can_be_used_for_queries() {
     create_test_table(&db.pool).await;
 
     // Create subscription
-    create_subscription(&db.pool, "user_lsn_query", 9, "INSERT", None, None).await;
+    create_subscription(&db.pool, "user_lsn_query", 9, "INSERT", Default::default()).await;
 
     // Insert users
     for i in 0..5 {
@@ -643,15 +641,15 @@ async fn test_static_metadata() {
         "routing_key": "users.created"
     });
 
-    create_subscription_full(
+    create_subscription(
         &db.pool,
         "user_with_metadata",
         10,
         "INSERT",
-        None,
-        None,
-        Some(metadata),
-        None,
+        SubscriptionOpts {
+            metadata: Some(metadata),
+            ..Default::default()
+        },
     )
     .await;
 
@@ -695,15 +693,15 @@ async fn test_metadata_extensions() {
         {"json_path": "partition_key", "expression": "new.email"}
     ]);
 
-    create_subscription_full(
+    create_subscription(
         &db.pool,
         "user_with_dynamic_metadata",
         11,
         "INSERT",
-        None,
-        None,
-        None,
-        Some(metadata_extensions),
+        SubscriptionOpts {
+            metadata_extensions: Some(metadata_extensions),
+            ..Default::default()
+        },
     )
     .await;
 
@@ -748,15 +746,16 @@ async fn test_merged_static_and_dynamic_metadata() {
         {"json_path": "doc_id", "expression": "new.id::text"}
     ]);
 
-    create_subscription_full(
+    create_subscription(
         &db.pool,
         "user_with_merged_metadata",
         12,
         "INSERT",
-        None,
-        None,
-        Some(static_metadata),
-        Some(metadata_extensions),
+        SubscriptionOpts {
+            metadata: Some(static_metadata),
+            metadata_extensions: Some(metadata_extensions),
+            ..Default::default()
+        },
     )
     .await;
 
@@ -806,15 +805,15 @@ async fn test_metadata_extensions_with_nested_paths() {
         {"json_path": "tags.source", "expression": "'postgres'"}
     ]);
 
-    create_subscription_full(
+    create_subscription(
         &db.pool,
         "user_with_nested_metadata",
         13,
         "INSERT",
-        None,
-        None,
-        None,
-        Some(metadata_extensions),
+        SubscriptionOpts {
+            metadata_extensions: Some(metadata_extensions),
+            ..Default::default()
+        },
     )
     .await;
 

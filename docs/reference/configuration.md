@@ -16,7 +16,10 @@ stream:
     tls:
       enabled: false
       trusted_root_certs: ""
-    keepalive: 60
+    keepalive:
+      idle_secs: 30
+      interval_secs: 10
+      retries: 3
   batch:
     max_size: 1000
     max_fill_secs: 5
@@ -109,13 +112,37 @@ Path to CA certificate file for TLS verification.
 
 #### `keepalive`
 
+TCP keepalive settings. All fields are optional and have sensible defaults.
+
+##### `keepalive.idle_secs`
+
 | | |
 |--|--|
 | Type | integer |
 | Required | No |
-| Default | 60 |
+| Default | 30 |
 
-TCP keepalive interval in seconds.
+Seconds of idle time before the first keepalive probe is sent.
+
+##### `keepalive.interval_secs`
+
+| | |
+|--|--|
+| Type | integer |
+| Required | No |
+| Default | 10 |
+
+Seconds between successive keepalive probes.
+
+##### `keepalive.retries`
+
+| | |
+|--|--|
+| Type | integer |
+| Required | No |
+| Default | 3 |
+
+Number of failed probes before the connection is considered dead.
 
 ### `stream.batch`
 
