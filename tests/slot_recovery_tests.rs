@@ -11,7 +11,7 @@ use std::time::Duration;
 
 use etl::store::both::postgres::PostgresStore;
 use postgres_stream::migrations::migrate_etl;
-use postgres_stream::queries::{SlotState, get_slot_state};
+use postgres_stream::queries::get_slot_state;
 use postgres_stream::sink::memory::MemorySink;
 use postgres_stream::slot_recovery::handle_slot_recovery;
 use postgres_stream::stream::PgStream;
@@ -226,7 +226,7 @@ async fn test_start_with_inactive_invalidated_slot_triggers_recovery() {
         .await
         .expect("Should query slot state");
     assert!(
-        matches!(state, Some(SlotState::Invalidated)),
+        state.as_ref().is_some_and(|s| s.is_invalidated()),
         "Expected slot to be invalidated, got: {state:?}, pipeline error: {slot_error}"
     );
 

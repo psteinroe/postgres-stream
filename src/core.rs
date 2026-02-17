@@ -5,7 +5,7 @@
 use crate::{
     config::{PipelineConfig, SinkConfig},
     migrations::migrate_etl,
-    queries::{SlotState, get_slot_state},
+    queries::get_slot_state,
     sink::{AnySink, memory::MemorySink},
     slot_recovery::handle_slot_recovery,
     stream::PgStream,
@@ -57,7 +57,7 @@ pub async fn start_pipeline_with_config(config: PipelineConfig) -> EtlResult<()>
 
                 let state = get_slot_state(&pool, &config.stream.id.slot_name()).await?;
 
-                if matches!(state, Some(SlotState::Invalidated)) {
+                if state.is_some_and(|s| s.is_invalidated()) {
                     warn!(error = %e, "replication slot invalidated, attempting recovery");
 
                     if let Err(recovery_err) = handle_slot_recovery(&pool, config.stream.id).await {
