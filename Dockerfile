@@ -21,6 +21,7 @@ RUN apt-get update && \
     pkg-config \
     libssl-dev \
     clang \
+    cmake \
     make \
     lld && \
     rm -rf /var/lib/apt/lists/*
