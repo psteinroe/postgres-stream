@@ -10,7 +10,6 @@
 use std::time::Duration;
 
 use etl::store::both::postgres::PostgresStore;
-use postgres_stream::migrations::migrate_etl;
 use postgres_stream::queries::get_slot_state;
 use postgres_stream::sink::memory::MemorySink;
 use postgres_stream::slot_recovery::handle_slot_recovery;
@@ -32,14 +31,11 @@ async fn test_start_with_inactive_invalidated_slot_triggers_recovery() {
     // The slot name follows the etl crate's naming convention
     let slot_name = format!("supabase_etl_apply_{pipeline_id}");
 
-    // Step 1: Run ETL migrations
-    migrate_etl(&db.config)
-        .await
-        .expect("Failed to run ETL migrations");
-
-    // Step 2: Create and start a pipeline to establish the replication slot
+    // Step 1: Create and start a pipeline to establish the replication slot
     {
-        let state_store = PostgresStore::new(pipeline_id, db.config.clone());
+        let state_store = PostgresStore::new(pipeline_id, db.config.clone())
+            .await
+            .expect("Failed to create PostgresStore");
         let sink = MemorySink::new();
         let pgstream = PgStream::create(stream_config.clone(), sink, state_store.clone())
             .await
@@ -168,7 +164,9 @@ async fn test_start_with_inactive_invalidated_slot_triggers_recovery() {
     );
 
     // Step 5: Try to restart the pipeline with the invalidated slot
-    let state_store = PostgresStore::new(pipeline_id, db.config.clone());
+    let state_store = PostgresStore::new(pipeline_id, db.config.clone())
+        .await
+        .expect("Failed to create PostgresStore");
     let sink = MemorySink::new();
     let pgstream = PgStream::create(stream_config.clone(), sink, state_store.clone())
         .await
@@ -259,11 +257,6 @@ async fn test_pipeline_recovers_from_invalidated_slot() {
     let pipeline_id = stream_config.id;
     let slot_name = format!("supabase_etl_apply_{pipeline_id}");
 
-    // Run migrations
-    migrate_etl(&db.config)
-        .await
-        .expect("Failed to run ETL migrations");
-
     // Create a subscription so we generate events
     db.ensure_today_partition().await;
 
@@ -272,7 +265,9 @@ async fn test_pipeline_recovers_from_invalidated_slot() {
 
     // Step 1: Start pipeline, wait for replication to be ready, then insert test events
     {
-        let state_store = PostgresStore::new(pipeline_id, db.config.clone());
+        let state_store = PostgresStore::new(pipeline_id, db.config.clone())
+            .await
+            .expect("Failed to create PostgresStore");
         let pgstream = PgStream::create(stream_config.clone(), sink.clone(), state_store.clone())
             .await
             .expect("Failed to create PgStream");
@@ -522,7 +517,9 @@ async fn test_pipeline_recovers_from_invalidated_slot() {
     // Step 6: Restart pipeline - ETL will create a new slot and run DataSync (which we skip)
     // When replication events arrive, handle_failover() will COPY missed events and clear checkpoint
     {
-        let state_store = PostgresStore::new(pipeline_id, db.config.clone());
+        let state_store = PostgresStore::new(pipeline_id, db.config.clone())
+            .await
+            .expect("Failed to create PostgresStore");
         let pgstream = PgStream::create(stream_config.clone(), sink.clone(), state_store.clone())
             .await
             .expect("Failed to create PgStream");
@@ -674,10 +671,6 @@ async fn test_slot_recovery_preserves_existing_failover_checkpoint() {
     let pipeline_id = stream_config.id;
     let slot_name = format!("supabase_etl_apply_{pipeline_id}");
 
-    migrate_etl(&db.config)
-        .await
-        .expect("Failed to run ETL migrations");
-
     db.ensure_today_partition().await;
 
     // Create an existing failover checkpoint before the slot is created.
@@ -695,7 +688,9 @@ async fn test_slot_recovery_preserves_existing_failover_checkpoint() {
 
     // Start and stop pipeline once to create the replication slot.
     {
-        let state_store = PostgresStore::new(pipeline_id, db.config.clone());
+        let state_store = PostgresStore::new(pipeline_id, db.config.clone())
+            .await
+            .expect("Failed to create PostgresStore");
         let sink = MemorySink::new();
         let pgstream = PgStream::create(stream_config.clone(), sink, state_store.clone())
             .await

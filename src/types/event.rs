@@ -87,7 +87,7 @@ pub fn convert_event_from_table(
     let mut lsn = None;
 
     for (idx, col) in column_schemas.iter().enumerate() {
-        let Some(cell) = table_row.values.get_mut(idx) else {
+        let Some(cell) = table_row.values_mut().get_mut(idx) else {
             continue;
         };
 
@@ -170,16 +170,14 @@ mod tests {
         created_at: chrono::DateTime<Utc>,
         payload: serde_json::Value,
     ) -> TableRow {
-        TableRow {
-            values: vec![
-                Cell::Uuid(id),
-                Cell::TimestampTz(created_at),
-                Cell::Json(payload),
-                Cell::Null,                            // metadata
-                Cell::I64(1),                          // stream_id
-                Cell::String("0/16B3748".to_string()), // lsn (parsed to PgLsn)
-            ],
-        }
+        TableRow::new(vec![
+            Cell::Uuid(id),
+            Cell::TimestampTz(created_at),
+            Cell::Json(payload),
+            Cell::Null,                            // metadata
+            Cell::I64(1),                          // stream_id
+            Cell::String("0/16B3748".to_string()), // lsn (parsed to PgLsn)
+        ])
     }
 
     fn make_table_row_without_lsn(
@@ -187,16 +185,14 @@ mod tests {
         created_at: chrono::DateTime<Utc>,
         payload: serde_json::Value,
     ) -> TableRow {
-        TableRow {
-            values: vec![
-                Cell::Uuid(id),
-                Cell::TimestampTz(created_at),
-                Cell::Json(payload),
-                Cell::Null,   // metadata
-                Cell::I64(1), // stream_id
-                Cell::Null,   // lsn (null for events before migration)
-            ],
-        }
+        TableRow::new(vec![
+            Cell::Uuid(id),
+            Cell::TimestampTz(created_at),
+            Cell::Json(payload),
+            Cell::Null,   // metadata
+            Cell::I64(1), // stream_id
+            Cell::Null,   // lsn (null for events before migration)
+        ])
     }
 
     #[test]
@@ -236,16 +232,14 @@ mod tests {
     #[test]
     fn test_convert_event_from_table_missing_id() {
         let column_schemas = make_column_schemas();
-        let mut table_row = TableRow {
-            values: vec![
-                Cell::Null, // Missing id
-                Cell::TimestampTz(Utc::now()),
-                Cell::Json(serde_json::json!({"test": "data"})),
-                Cell::Null,
-                Cell::I64(1),
-                Cell::Null, // lsn
-            ],
-        };
+        let mut table_row = TableRow::new(vec![
+            Cell::Null, // Missing id
+            Cell::TimestampTz(Utc::now()),
+            Cell::Json(serde_json::json!({"test": "data"})),
+            Cell::Null,
+            Cell::I64(1),
+            Cell::Null, // lsn
+        ]);
 
         let result = convert_event_from_table(&mut table_row, &column_schemas);
 
@@ -256,16 +250,14 @@ mod tests {
     #[test]
     fn test_convert_event_from_table_missing_created_at() {
         let column_schemas = make_column_schemas();
-        let mut table_row = TableRow {
-            values: vec![
-                Cell::Uuid(Uuid::new_v4()),
-                Cell::Null, // Missing created_at
-                Cell::Json(serde_json::json!({"test": "data"})),
-                Cell::Null,
-                Cell::I64(1),
-                Cell::Null, // lsn
-            ],
-        };
+        let mut table_row = TableRow::new(vec![
+            Cell::Uuid(Uuid::new_v4()),
+            Cell::Null, // Missing created_at
+            Cell::Json(serde_json::json!({"test": "data"})),
+            Cell::Null,
+            Cell::I64(1),
+            Cell::Null, // lsn
+        ]);
 
         let result = convert_event_from_table(&mut table_row, &column_schemas);
 
@@ -281,16 +273,14 @@ mod tests {
     #[test]
     fn test_convert_event_from_table_missing_payload() {
         let column_schemas = make_column_schemas();
-        let mut table_row = TableRow {
-            values: vec![
-                Cell::Uuid(Uuid::new_v4()),
-                Cell::TimestampTz(Utc::now()),
-                Cell::Null, // Missing payload
-                Cell::Null,
-                Cell::I64(1),
-                Cell::Null, // lsn
-            ],
-        };
+        let mut table_row = TableRow::new(vec![
+            Cell::Uuid(Uuid::new_v4()),
+            Cell::TimestampTz(Utc::now()),
+            Cell::Null, // Missing payload
+            Cell::Null,
+            Cell::I64(1),
+            Cell::Null, // lsn
+        ]);
 
         let result = convert_event_from_table(&mut table_row, &column_schemas);
 
@@ -339,6 +329,7 @@ mod tests {
             Event::Insert(InsertEvent {
                 start_lsn: PgLsn::from(0),
                 commit_lsn: PgLsn::from(0),
+                tx_ordinal: 0,
                 table_id: TableId::new(1),
                 table_row: make_table_row(id, ts, serde_json::json!({"test": 1})),
             }),
@@ -373,17 +364,16 @@ mod tests {
         let events = vec![Event::Insert(InsertEvent {
             start_lsn: PgLsn::from(0),
             commit_lsn: PgLsn::from(0),
+            tx_ordinal: 0,
             table_id: TableId::new(1),
-            table_row: TableRow {
-                values: vec![
-                    Cell::Null, // Missing id
-                    Cell::TimestampTz(Utc::now()),
-                    Cell::Json(serde_json::json!({"test": 1})),
-                    Cell::Null,
-                    Cell::I64(1),
-                    Cell::Null, // lsn
-                ],
-            },
+            table_row: TableRow::new(vec![
+                Cell::Null, // Missing id
+                Cell::TimestampTz(Utc::now()),
+                Cell::Json(serde_json::json!({"test": 1})),
+                Cell::Null,
+                Cell::I64(1),
+                Cell::Null, // lsn
+            ]),
         })];
 
         let result = convert_stream_events_from_events(events, &column_schemas);

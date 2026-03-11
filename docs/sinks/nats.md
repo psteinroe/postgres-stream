@@ -62,8 +62,8 @@ stream:
     tls:
       enabled: false
   batch:
-    max_size: 1000
-    max_fill_secs: 5
+    memory_budget_ratio: 0.2
+    max_fill_ms: 5000
 
 sink:
   type: nats

@@ -21,8 +21,8 @@ stream:
       interval_secs: 10
       retries: 3
   batch:
-    max_size: 1000
-    max_fill_secs: 5
+    memory_budget_ratio: 0.2
+    max_fill_ms: 5000
 
 sink:
   type: kafka
@@ -148,25 +148,25 @@ Number of failed probes before the connection is considered dead.
 
 Controls how events are grouped before delivery.
 
-#### `max_size`
+#### `memory_budget_ratio`
+
+| | |
+|--|--|
+| Type | float |
+| Required | No |
+| Default | 0.2 |
+
+Fraction of total process memory reserved for batched stream payloads. Higher values allow larger batches but increase memory usage.
+
+#### `max_fill_ms`
 
 | | |
 |--|--|
 | Type | integer |
 | Required | No |
-| Default | 1000 |
+| Default | 10000 |
 
-Maximum events per batch. Larger batches improve throughput but increase latency.
-
-#### `max_fill_secs`
-
-| | |
-|--|--|
-| Type | integer |
-| Required | No |
-| Default | 5 |
-
-Maximum time to fill a batch in seconds. Lower values reduce latency but may result in smaller batches.
+Maximum time to fill a batch in milliseconds. Lower values reduce latency but may result in smaller batches.
 
 ## Sink Configuration
 

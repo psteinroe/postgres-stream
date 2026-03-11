@@ -58,7 +58,9 @@ pub async fn create_postgres_store(
     config: &PgConnectionConfig,
     pool: &PgPool,
 ) -> PostgresStore {
-    let store = PostgresStore::new(stream_id, config.clone());
+    let store = PostgresStore::new(stream_id, config.clone())
+        .await
+        .expect("Failed to create PostgresStore");
     init_events_schema(&store, pool)
         .await
         .expect("Failed to initialize events schema");
@@ -74,7 +76,9 @@ pub async fn create_postgres_store_with_table_id(
     config: &PgConnectionConfig,
     pool: &PgPool,
 ) -> (PostgresStore, TableId) {
-    let store = PostgresStore::new(stream_id, config.clone());
+    let store = PostgresStore::new(stream_id, config.clone())
+        .await
+        .expect("Failed to create PostgresStore");
     let table_id = init_events_schema(&store, pool)
         .await
         .expect("Failed to initialize events schema");

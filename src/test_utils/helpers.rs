@@ -31,8 +31,8 @@ pub fn test_stream_config_with_id(db: &TestDatabase, id: u64) -> StreamConfig {
         id,
         pg_connection: db.config.clone(),
         batch: etl::config::BatchConfig {
-            max_size: 100,
             max_fill_ms: 1000,
+            memory_budget_ratio: 0.2,
         },
     }
 }
@@ -52,16 +52,15 @@ pub fn make_test_event(table_id: TableId, payload: serde_json::Value) -> Event {
     Event::Insert(InsertEvent {
         start_lsn: PgLsn::from(0),
         commit_lsn: PgLsn::from(0),
+        tx_ordinal: 0,
         table_id,
-        table_row: TableRow {
-            values: vec![
-                Cell::Uuid(Uuid::new_v4()),   // id
-                Cell::Json(payload),          // payload
-                Cell::Null,                   // metadata
-                Cell::I64(1),                 // stream_id
-                Cell::TimestampTz(timestamp), // created_at
-            ],
-        },
+        table_row: TableRow::new(vec![
+            Cell::Uuid(Uuid::new_v4()),   // id
+            Cell::Json(payload),          // payload
+            Cell::Null,                   // metadata
+            Cell::I64(1),                 // stream_id
+            Cell::TimestampTz(timestamp), // created_at
+        ]),
     })
 }
 
@@ -76,16 +75,15 @@ pub fn make_event_with_id(
     Event::Insert(InsertEvent {
         start_lsn: PgLsn::from(0),
         commit_lsn: PgLsn::from(0),
+        tx_ordinal: 0,
         table_id,
-        table_row: TableRow {
-            values: vec![
-                Cell::Uuid(Uuid::parse_str(&id.id).unwrap()), // id
-                Cell::Json(payload),                          // payload
-                Cell::Null,                                   // metadata
-                Cell::I64(1),                                 // stream_id
-                Cell::TimestampTz(id.created_at),             // created_at
-            ],
-        },
+        table_row: TableRow::new(vec![
+            Cell::Uuid(Uuid::parse_str(&id.id).unwrap()), // id
+            Cell::Json(payload),                          // payload
+            Cell::Null,                                   // metadata
+            Cell::I64(1),                                 // stream_id
+            Cell::TimestampTz(id.created_at),             // created_at
+        ]),
     })
 }
 

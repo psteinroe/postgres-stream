@@ -229,8 +229,8 @@ async fn test_store_multiple_streams_isolated() {
         id: 1,
         pg_connection: db.config.clone(),
         batch: etl::config::BatchConfig {
-            max_size: 100,
             max_fill_ms: 1000,
+            memory_budget_ratio: 0.2,
         },
     };
 
@@ -238,8 +238,8 @@ async fn test_store_multiple_streams_isolated() {
         id: 2,
         pg_connection: db.config.clone(),
         batch: etl::config::BatchConfig {
-            max_size: 100,
             max_fill_ms: 1000,
+            memory_budget_ratio: 0.2,
         },
     };
 

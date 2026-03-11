@@ -1,6 +1,6 @@
 use etl::config::{
-    BatchConfig, InvalidatedSlotBehavior, PgConnectionConfig, PgConnectionConfigWithoutSecrets,
-    PipelineConfig, TableSyncCopyConfig,
+    BatchConfig, InvalidatedSlotBehavior, MemoryBackpressureConfig, PgConnectionConfig,
+    PgConnectionConfigWithoutSecrets, PipelineConfig, TableSyncCopyConfig,
 };
 use serde::{Deserialize, Serialize};
 
@@ -69,6 +69,9 @@ impl From<StreamConfig> for PipelineConfig {
             table_sync_copy: TableSyncCopyConfig::default(),
             // single table, serial copy is fine
             max_copy_connections_per_table: 1,
+            // Intentionally mirror upstream ETL defaults for memory-based backpressure.
+            memory_refresh_interval_ms: PipelineConfig::DEFAULT_MEMORY_REFRESH_INTERVAL_MS,
+            memory_backpressure: Some(MemoryBackpressureConfig::default()),
             // we handle recovery ourselves with checkpoint preservation
             invalidated_slot_behavior: InvalidatedSlotBehavior::Error,
         }

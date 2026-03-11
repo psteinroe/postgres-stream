@@ -490,7 +490,7 @@ stream:
       enabled: false
       trusted_root_certs: ""
   batch:
-    max_size: 100
+    memory_budget_ratio: 0.25
     max_fill_ms: 50
 sink:
   type: memory
@@ -513,7 +513,7 @@ sink:
                     "APP_STREAM__PG_CONNECTION__TLS__TRUSTED_ROOT_CERTS",
                     Some(""),
                 ),
-                ("APP_STREAM__BATCH__MAX_SIZE", Some("200")),
+                ("APP_STREAM__BATCH__MEMORY_BUDGET_RATIO", Some("0.4")),
                 ("APP_STREAM__BATCH__MAX_FILL_MS", Some("100")),
                 ("APP_SINK__TYPE", Some("memory")),
             ],
@@ -524,7 +524,7 @@ sink:
                 assert_eq!(config.stream.pg_connection.port, 5433);
                 assert_eq!(config.stream.pg_connection.name, "mydb");
                 assert_eq!(config.stream.pg_connection.username, "user");
-                assert_eq!(config.stream.batch.max_size, 200);
+                assert_eq!(config.stream.batch.memory_budget_ratio, 0.4);
                 assert_eq!(config.stream.batch.max_fill_ms, 100);
             },
         );
