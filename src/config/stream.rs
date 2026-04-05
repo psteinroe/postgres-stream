@@ -66,7 +66,8 @@ impl From<StreamConfig> for PipelineConfig {
             // todo
             table_error_retry_delay_ms: 1000,
             table_error_retry_max_attempts: 5,
-            table_sync_copy: TableSyncCopyConfig::default(),
+            // pgstream discards table copies (write_table_rows is a no-op), skip them entirely
+            table_sync_copy: TableSyncCopyConfig::SkipAllTables,
             // single table, serial copy is fine
             max_copy_connections_per_table: 1,
             // we handle recovery ourselves with checkpoint preservation

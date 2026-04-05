@@ -8,7 +8,7 @@ use etl::{
 };
 use futures::StreamExt;
 use tokio::pin;
-use tracing::info;
+use tracing::{info, warn};
 
 use crate::{
     concurrency::TimeoutBatchStream,
@@ -51,7 +51,17 @@ where
         let store = StreamStore::create(config.clone(), store).await?;
 
         // run initial maintenance synchronously during startup if due
-        let (_, next_maintenance_at) = store.get_stream_state().await?;
+        let (status, next_maintenance_at) = store.get_stream_state().await?;
+        if let StreamStatus::Failover {
+            checkpoint_event_id,
+        } = &status
+        {
+            warn!(
+                checkpoint_event_id = %checkpoint_event_id.id,
+                "Stream starting in failover mode; recovery will be attempted on next batch"
+            );
+        }
+
         if Utc::now() >= next_maintenance_at {
             run_maintenance(&store, next_maintenance_at).await?;
             let next = next_maintenance_at + chrono::Duration::hours(24);
@@ -88,6 +98,11 @@ where
         } = status
         {
             let current_batch_event_id = events.first().unwrap().id.clone();
+            warn!(
+                checkpoint_event_id = %checkpoint_event_id.id,
+                current_batch_event_id = %current_batch_event_id.id,
+                "Stream is in failover mode; attempting recovery before publishing current batch"
+            );
             self.handle_failover(&checkpoint_event_id, &current_batch_event_id)
                 .await?;
         }
@@ -102,14 +117,15 @@ where
         let event_count = events.len();
 
         let result = self.sink.publish_events(events).await;
-        if result.is_err() {
+        if let Err(err) = result {
             let (current_status, _) = self.store.get_stream_state().await?;
 
             match current_status {
                 StreamStatus::Healthy => {
-                    info!(
-                        "Publishing events failed, entering failover at checkpoint event id: {:?}",
-                        checkpoint_id
+                    warn!(
+                        checkpoint_event_id = %checkpoint_id.id,
+                        error = %err,
+                        "Publishing events failed, entering failover"
                     );
                     metrics::record_failover_entered(self.config.id);
                     self.store
@@ -121,9 +137,10 @@ where
                 StreamStatus::Failover {
                     checkpoint_event_id,
                 } => {
-                    info!(
-                        "Publishing events failed while already in failover, preserving checkpoint event id: {:?}",
-                        checkpoint_event_id
+                    warn!(
+                        checkpoint_event_id = %checkpoint_event_id.id,
+                        error = %err,
+                        "Publishing events failed while already in failover, preserving checkpoint event id"
                     );
                 }
             }
@@ -208,7 +225,13 @@ where
             .publish_events(vec![(*checkpoint_event).clone()])
             .await;
 
-        if result.is_err() {
+        if let Err(err) = result {
+            warn!(
+                checkpoint_event_id = %checkpoint_event.id.id,
+                current_batch_event_id = %current_batch_event_id.id,
+                error = %err,
+                "Failed to publish checkpoint event during failover recovery; skipping replay"
+            );
             return Ok(());
         }
 
@@ -239,7 +262,14 @@ where
             let last_event_id = events.last().unwrap().id.clone();
             let last_event_timestamp = events.last().unwrap().id.created_at;
 
-            self.sink.publish_events(events).await?;
+            if let Err(err) = self.sink.publish_events(events).await {
+                warn!(
+                    last_event_id = %last_event_id.id,
+                    error = %err,
+                    "Sink failed during failover replay; aborting replay and staying in failover"
+                );
+                return Ok(());
+            }
 
             // Record processing lag during failover replay
             let lag_milliseconds = (Utc::now() - last_event_timestamp).num_milliseconds();
