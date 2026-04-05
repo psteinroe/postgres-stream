@@ -103,8 +103,12 @@ where
                 current_batch_event_id = %current_batch_event_id.id,
                 "Stream is in failover mode; attempting recovery before publishing current batch"
             );
-            self.handle_failover(&checkpoint_event_id, &current_batch_event_id)
+            let recovered = self
+                .handle_failover(&checkpoint_event_id, &current_batch_event_id)
                 .await?;
+            if !recovered {
+                return Ok(());
+            }
         }
 
         // Publish events
@@ -211,7 +215,7 @@ where
         &self,
         checkpoint_event_id: &EventIdentifier,
         current_batch_event_id: &EventIdentifier,
-    ) -> EtlResult<()> {
+    ) -> EtlResult<bool> {
         let failover_start = Utc::now();
 
         let checkpoint_event = self.store.get_checkpoint_event(checkpoint_event_id).await?;
@@ -220,9 +224,18 @@ where
         let lag_milliseconds = (Utc::now() - checkpoint_event.id.created_at).num_milliseconds();
         metrics::record_processing_lag(self.config.id, lag_milliseconds);
 
-        self.sink
+        if let Err(err) = self
+            .sink
             .publish_events(vec![(*checkpoint_event).clone()])
-            .await?;
+            .await
+        {
+            warn!(
+                checkpoint_event_id = %checkpoint_event.id.id,
+                error = %err,
+                "Sink still unavailable during failover recovery; will retry on next tick"
+            );
+            return Ok(false);
+        }
 
         info!(
             "Sink recovered, starting failover replay from checkpoint event id: {:?}",
@@ -251,7 +264,14 @@ where
             let last_event_id = events.last().unwrap().id.clone();
             let last_event_timestamp = events.last().unwrap().id.created_at;
 
-            self.sink.publish_events(events).await?;
+            if let Err(err) = self.sink.publish_events(events).await {
+                warn!(
+                    last_event_id = %last_event_id.id,
+                    error = %err,
+                    "Sink failed during failover replay; will retry on next tick"
+                );
+                return Ok(false);
+            }
 
             // Record processing lag during failover replay
             let lag_milliseconds = (Utc::now() - last_event_timestamp).num_milliseconds();
@@ -271,7 +291,7 @@ where
 
         info!("Failover recovery completed");
 
-        Ok(())
+        Ok(true)
     }
 }
 
