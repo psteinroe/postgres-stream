@@ -262,14 +262,7 @@ where
             let last_event_id = events.last().unwrap().id.clone();
             let last_event_timestamp = events.last().unwrap().id.created_at;
 
-            if let Err(err) = self.sink.publish_events(events).await {
-                warn!(
-                    last_event_id = %last_event_id.id,
-                    error = %err,
-                    "Sink failed during failover replay; aborting replay and staying in failover"
-                );
-                return Ok(());
-            }
+            self.sink.publish_events(events).await?;
 
             // Record processing lag during failover replay
             let lag_milliseconds = (Utc::now() - last_event_timestamp).num_milliseconds();
