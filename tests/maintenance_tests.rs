@@ -2,7 +2,6 @@ use chrono::Duration;
 use etl::store::both::postgres::PostgresStore;
 use postgres_stream::maintenance::run_maintenance;
 use postgres_stream::sink::memory::MemorySink;
-use postgres_stream::store::StreamStore;
 use postgres_stream::stream::PgStream;
 use postgres_stream::test_utils::{TestDatabase, create_postgres_store, test_stream_config};
 
@@ -37,8 +36,8 @@ async fn test_maintenance_creates_future_partitions() {
     let sink = MemorySink::new();
     let store = create_postgres_store(config.id, &db.config, &db.pool).await;
 
-    let _stream: PgStream<MemorySink, PostgresStore> =
-        PgStream::create(config, sink, store.clone()).await.unwrap();
+    let stream: PgStream<MemorySink, PostgresStore> =
+        PgStream::create(config, sink, store).await.unwrap();
 
     // Manually delete all partitions except today
     sqlx::query(
@@ -72,11 +71,8 @@ async fn test_maintenance_creates_future_partitions() {
     assert_eq!(count_before.0, 1);
 
     // Run maintenance manually
-    let stream_store = StreamStore::create(test_stream_config(&db), store.clone())
-        .await
-        .unwrap();
     let scheduled_time = chrono::Utc::now();
-    run_maintenance(&stream_store, scheduled_time)
+    run_maintenance(stream.store(), scheduled_time)
         .await
         .unwrap();
 
@@ -99,8 +95,8 @@ async fn test_maintenance_drops_old_partitions() {
     let sink = MemorySink::new();
     let store = create_postgres_store(config.id, &db.config, &db.pool).await;
 
-    let _stream: PgStream<MemorySink, PostgresStore> =
-        PgStream::create(config, sink, store.clone()).await.unwrap();
+    let stream: PgStream<MemorySink, PostgresStore> =
+        PgStream::create(config, sink, store).await.unwrap();
 
     // Create an old partition (10 days ago - beyond 7 day retention)
     let old_date = chrono::Utc::now() - Duration::days(10);
@@ -130,11 +126,8 @@ async fn test_maintenance_drops_old_partitions() {
     assert!(exists_before.0);
 
     // Run maintenance
-    let stream_store = StreamStore::create(test_stream_config(&db), store.clone())
-        .await
-        .unwrap();
     let scheduled_time = chrono::Utc::now();
-    run_maintenance(&stream_store, scheduled_time)
+    run_maintenance(stream.store(), scheduled_time)
         .await
         .unwrap();
 
@@ -159,30 +152,28 @@ async fn test_maintenance_updates_next_maintenance_at() {
     let sink = MemorySink::new();
     let store = create_postgres_store(config.id, &db.config, &db.pool).await;
 
-    let _stream: PgStream<MemorySink, PostgresStore> =
-        PgStream::create(config, sink, store.clone()).await.unwrap();
+    let stream: PgStream<MemorySink, PostgresStore> =
+        PgStream::create(config, sink, store).await.unwrap();
 
     // Get initial next_maintenance_at
-    let stream_store = StreamStore::create(test_stream_config(&db), store.clone())
-        .await
-        .unwrap();
-    let (_status, next_before) = stream_store.get_stream_state().await.unwrap();
+    let (_status, next_before) = stream.store().get_stream_state().await.unwrap();
 
     // Run maintenance
     let scheduled_time = next_before;
-    let completed_at = run_maintenance(&stream_store, scheduled_time)
+    let completed_at = run_maintenance(stream.store(), scheduled_time)
         .await
         .unwrap();
 
     // Update the next maintenance time
     let next_after = next_before + Duration::hours(24);
-    stream_store
+    stream
+        .store()
         .store_next_maintenance_at(next_after)
         .await
         .unwrap();
 
     // Verify next_maintenance_at was updated
-    let (_status_after, next_after_stored) = stream_store.get_stream_state().await.unwrap();
+    let (_status_after, next_after_stored) = stream.store().get_stream_state().await.unwrap();
 
     assert!(
         next_after_stored > next_before,
@@ -201,19 +192,15 @@ async fn test_maintenance_idempotent() {
     let sink = MemorySink::new();
     let store = create_postgres_store(config.id, &db.config, &db.pool).await;
 
-    let _stream: PgStream<MemorySink, PostgresStore> =
-        PgStream::create(config, sink, store.clone()).await.unwrap();
-
-    let stream_store = StreamStore::create(test_stream_config(&db), store.clone())
-        .await
-        .unwrap();
+    let stream: PgStream<MemorySink, PostgresStore> =
+        PgStream::create(config, sink, store).await.unwrap();
 
     // Run maintenance twice
     let scheduled_time = chrono::Utc::now();
-    run_maintenance(&stream_store, scheduled_time)
+    run_maintenance(stream.store(), scheduled_time)
         .await
         .unwrap();
-    run_maintenance(&stream_store, scheduled_time)
+    run_maintenance(stream.store(), scheduled_time)
         .await
         .unwrap();
 
@@ -237,16 +224,12 @@ async fn test_run_maintenance_returns_scheduled_time() {
     let sink = MemorySink::new();
     let store = create_postgres_store(config.id, &db.config, &db.pool).await;
 
-    let _stream: PgStream<MemorySink, PostgresStore> =
-        PgStream::create(config, sink, store.clone()).await.unwrap();
-
-    let stream_store = StreamStore::create(test_stream_config(&db), store.clone())
-        .await
-        .unwrap();
+    let stream: PgStream<MemorySink, PostgresStore> =
+        PgStream::create(config, sink, store).await.unwrap();
 
     // Use a specific scheduled_time (1 hour in the past)
     let scheduled_time = chrono::Utc::now() - Duration::hours(1);
-    let returned_time = run_maintenance(&stream_store, scheduled_time)
+    let returned_time = run_maintenance(stream.store(), scheduled_time)
         .await
         .unwrap();
 
@@ -264,19 +247,15 @@ async fn test_maintenance_scheduling_uses_scheduled_time_not_execution_time() {
     let sink = MemorySink::new();
     let store = create_postgres_store(config.id, &db.config, &db.pool).await;
 
-    let _stream: PgStream<MemorySink, PostgresStore> =
-        PgStream::create(config, sink, store.clone()).await.unwrap();
-
-    let stream_store = StreamStore::create(test_stream_config(&db), store.clone())
-        .await
-        .unwrap();
+    let stream: PgStream<MemorySink, PostgresStore> =
+        PgStream::create(config, sink, store).await.unwrap();
 
     // Simulate a maintenance that was scheduled for 2 hours ago
     // This can happen if the system was down during the scheduled maintenance time
     let original_scheduled_time = chrono::Utc::now() - Duration::hours(2);
 
     // Run maintenance with the original scheduled time
-    let returned_time = run_maintenance(&stream_store, original_scheduled_time)
+    let returned_time = run_maintenance(stream.store(), original_scheduled_time)
         .await
         .unwrap();
 
@@ -284,12 +263,13 @@ async fn test_maintenance_scheduling_uses_scheduled_time_not_execution_time() {
     // not 24h from now. This ensures consistent daily scheduling even if
     // maintenance runs late.
     let expected_next_maintenance = original_scheduled_time + Duration::hours(24);
-    stream_store
+    stream
+        .store()
         .store_next_maintenance_at(expected_next_maintenance)
         .await
         .unwrap();
 
-    let (_status, actual_next_maintenance) = stream_store.get_stream_state().await.unwrap();
+    let (_status, actual_next_maintenance) = stream.store().get_stream_state().await.unwrap();
 
     // Verify the next maintenance is scheduled based on the original scheduled time
     assert_eq!(

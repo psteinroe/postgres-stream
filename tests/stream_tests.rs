@@ -2,13 +2,13 @@ use chrono::Duration;
 use etl::destination::Destination;
 use etl::store::both::postgres::PostgresStore;
 use postgres_stream::sink::memory::MemorySink;
-use postgres_stream::store::StreamStore;
 use postgres_stream::stream::PgStream;
 use postgres_stream::test_utils::{
     FailableSink, TestDatabase, create_postgres_store, create_postgres_store_with_table_id,
     insert_events_to_db, make_event_with_id, make_test_event, test_stream_config,
 };
 use postgres_stream::types::{StreamStatus, TriggeredEvent};
+use std::collections::HashSet;
 use std::time::Duration as StdDuration;
 
 // Basic stream tests
@@ -62,7 +62,7 @@ async fn test_failover_sink_failure_enters_failover_mode() {
         create_postgres_store_with_table_id(config.id, &db.config, &db.pool).await;
 
     let stream: PgStream<FailableSink, PostgresStore> =
-        PgStream::create(config.clone(), sink.clone(), store.clone())
+        PgStream::create(config.clone(), sink.clone(), store)
             .await
             .expect("Failed to create PgStream");
 
@@ -81,8 +81,7 @@ async fn test_failover_sink_failure_enters_failover_mode() {
         .await
         .expect("write_events should succeed even if sink fails");
 
-    let stream_store = StreamStore::create(config, store).await.unwrap();
-    let (status, _) = stream_store.get_stream_state().await.unwrap();
+    let (status, _) = stream.store().get_stream_state().await.unwrap();
 
     match status {
         StreamStatus::Failover {
@@ -108,7 +107,7 @@ async fn test_failover_recovery_replays_missed_events() {
         create_postgres_store_with_table_id(config.id, &db.config, &db.pool).await;
 
     let stream: PgStream<FailableSink, PostgresStore> =
-        PgStream::create(config.clone(), sink.clone(), store.clone())
+        PgStream::create(config.clone(), sink.clone(), store)
             .await
             .expect("Failed to create PgStream");
 
@@ -162,8 +161,7 @@ async fn test_failover_recovery_replays_missed_events() {
         );
     }
 
-    let stream_store = StreamStore::create(config, store).await.unwrap();
-    let (status, _) = stream_store.get_stream_state().await.unwrap();
+    let (status, _) = stream.store().get_stream_state().await.unwrap();
     assert!(
         matches!(status, StreamStatus::Healthy),
         "Stream should return to Healthy after recovery"
@@ -181,7 +179,7 @@ async fn test_failover_with_no_missed_events() {
         create_postgres_store_with_table_id(config.id, &db.config, &db.pool).await;
 
     let stream: PgStream<FailableSink, PostgresStore> =
-        PgStream::create(config.clone(), sink.clone(), store.clone())
+        PgStream::create(config.clone(), sink.clone(), store)
             .await
             .expect("Failed to create PgStream");
 
@@ -237,8 +235,7 @@ async fn test_failover_with_no_missed_events() {
         );
     }
 
-    let stream_store = StreamStore::create(config, store).await.unwrap();
-    let (status, _) = stream_store.get_stream_state().await.unwrap();
+    let (status, _) = stream.store().get_stream_state().await.unwrap();
     assert!(
         matches!(status, StreamStatus::Healthy),
         "Stream should return to Healthy after recovery"
@@ -254,7 +251,7 @@ async fn test_failover_multiple_consecutive_failures() {
         create_postgres_store_with_table_id(config.id, &db.config, &db.pool).await;
 
     let stream: PgStream<FailableSink, PostgresStore> =
-        PgStream::create(config.clone(), sink.clone(), store.clone())
+        PgStream::create(config.clone(), sink.clone(), store)
             .await
             .expect("Failed to create PgStream");
 
@@ -316,8 +313,7 @@ async fn test_failover_multiple_consecutive_failures() {
     );
 
     // Verify all 5 unique event IDs are present
-    let published_ids: std::collections::HashSet<String> =
-        published.iter().map(|e| e.id.id.clone()).collect();
+    let published_ids: HashSet<String> = published.iter().map(|e| e.id.id.clone()).collect();
     assert_eq!(
         published_ids.len(),
         5,
@@ -332,8 +328,7 @@ async fn test_failover_multiple_consecutive_failures() {
         );
     }
 
-    let stream_store = StreamStore::create(config, store).await.unwrap();
-    let (status, _) = stream_store.get_stream_state().await.unwrap();
+    let (status, _) = stream.store().get_stream_state().await.unwrap();
     assert!(
         matches!(status, StreamStatus::Healthy),
         "Stream should recover to Healthy even after multiple failures"
@@ -349,7 +344,7 @@ async fn test_failover_large_gap_recovery() {
         create_postgres_store_with_table_id(config.id, &db.config, &db.pool).await;
 
     let stream: PgStream<FailableSink, PostgresStore> =
-        PgStream::create(config.clone(), sink.clone(), store.clone())
+        PgStream::create(config.clone(), sink.clone(), store)
             .await
             .expect("Failed to create PgStream");
 
@@ -415,8 +410,7 @@ async fn test_failover_large_gap_recovery() {
         );
     }
 
-    let stream_store = StreamStore::create(config, store).await.unwrap();
-    let (status, _) = stream_store.get_stream_state().await.unwrap();
+    let (status, _) = stream.store().get_stream_state().await.unwrap();
     assert!(
         matches!(status, StreamStatus::Healthy),
         "Stream should recover to Healthy after large gap"
@@ -432,7 +426,7 @@ async fn test_failover_recovery_does_not_hang_when_replay_exceeds_batch_size() {
         create_postgres_store_with_table_id(config.id, &db.config, &db.pool).await;
 
     let stream: PgStream<FailableSink, PostgresStore> =
-        PgStream::create(config.clone(), sink.clone(), store.clone())
+        PgStream::create(config.clone(), sink.clone(), store)
             .await
             .expect("Failed to create PgStream");
 
@@ -479,8 +473,7 @@ async fn test_failover_recovery_does_not_hang_when_replay_exceeds_batch_size() {
     );
     recovery_result.unwrap().unwrap();
 
-    let stream_store = StreamStore::create(config, store).await.unwrap();
-    let (status, _) = stream_store.get_stream_state().await.unwrap();
+    let (status, _) = stream.store().get_stream_state().await.unwrap();
     assert!(
         matches!(status, StreamStatus::Healthy),
         "Stream should return to Healthy after large replay recovery"
@@ -530,15 +523,12 @@ async fn test_failover_checkpoint_persists_across_stream_instances() {
 
     // Create a new stream instance - should pick up failover state
     let stream2: PgStream<FailableSink, PostgresStore> =
-        PgStream::create(config.clone(), sink.clone(), store.clone())
+        PgStream::create(config.clone(), sink.clone(), store)
             .await
             .expect("Failed to create PgStream after restart");
 
     // Verify it's in failover state
-    let stream_store = StreamStore::create(config.clone(), store.clone())
-        .await
-        .unwrap();
-    let (status, _) = stream_store.get_stream_state().await.unwrap();
+    let (status, _) = stream2.store().get_stream_state().await.unwrap();
     assert!(
         matches!(status, StreamStatus::Failover { .. }),
         "Stream should be in Failover state after restart"
@@ -571,8 +561,7 @@ async fn test_failover_checkpoint_persists_across_stream_instances() {
         );
     }
 
-    let stream_store2 = StreamStore::create(config, store).await.unwrap();
-    let (status, _) = stream_store2.get_stream_state().await.unwrap();
+    let (status, _) = stream2.store().get_stream_state().await.unwrap();
     assert!(
         matches!(status, StreamStatus::Healthy),
         "Stream should be Healthy after recovery"
@@ -595,11 +584,9 @@ async fn test_shutdown_succeeds_and_preserves_maintenance_schedule() {
             .unwrap();
 
     // Set next_maintenance_at to 1 hour in the past
-    let helper_store = StreamStore::create(test_stream_config(&db), store.clone())
-        .await
-        .unwrap();
     let past_maintenance_time = chrono::Utc::now() - Duration::hours(1);
-    helper_store
+    stream1
+        .store()
         .store_next_maintenance_at(past_maintenance_time)
         .await
         .unwrap();
@@ -607,15 +594,12 @@ async fn test_shutdown_succeeds_and_preserves_maintenance_schedule() {
     // Drop and recreate stream - this reads the past time from DB and runs maintenance
     drop(stream1);
     let stream2: PgStream<MemorySink, PostgresStore> =
-        PgStream::create(config.clone(), MemorySink::new(), store.clone())
+        PgStream::create(config.clone(), MemorySink::new(), store)
             .await
             .unwrap();
 
     // Verify maintenance ran and scheduled next run 24h from the past scheduled time
-    let helper_store2 = StreamStore::create(test_stream_config(&db), store.clone())
-        .await
-        .unwrap();
-    let (_, next_maintenance) = helper_store2.get_stream_state().await.unwrap();
+    let (_, next_maintenance) = stream2.store().get_stream_state().await.unwrap();
     let expected_next = past_maintenance_time + Duration::hours(24);
 
     assert_eq!(
@@ -628,14 +612,193 @@ async fn test_shutdown_succeeds_and_preserves_maintenance_schedule() {
     stream2.shutdown().await.unwrap();
 
     // Schedule should be preserved after shutdown
-    let helper_store3 = StreamStore::create(test_stream_config(&db), store.clone())
-        .await
-        .unwrap();
-    let (_, next_after_shutdown) = helper_store3.get_stream_state().await.unwrap();
+    let (_, next_after_shutdown) = stream2.store().get_stream_state().await.unwrap();
 
     assert_eq!(
         next_after_shutdown.timestamp(),
         expected_next.timestamp(),
         "Next maintenance schedule should be preserved after shutdown"
     );
+}
+
+// Flaky sink failover tests
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_failover_flaky_sink_mid_replay_recovers() {
+    let db = TestDatabase::spawn().await;
+    let config = test_stream_config(&db);
+    let sink = FailableSink::new();
+    let (store, table_id) =
+        create_postgres_store_with_table_id(config.id, &db.config, &db.pool).await;
+
+    let stream: PgStream<FailableSink, PostgresStore> =
+        PgStream::create(config.clone(), sink.clone(), store)
+            .await
+            .expect("Failed to create PgStream");
+
+    let event_ids = insert_events_to_db(&db, 6).await;
+
+    // Event 0: success
+    sink.succeed_always();
+    stream
+        .write_events(vec![make_event_with_id(
+            table_id,
+            event_ids.first().expect("Should have event 0"),
+            serde_json::json!({"seq": 1}),
+        )])
+        .await
+        .unwrap();
+
+    // Event 1: fail - enters failover (call 1)
+    sink.fail_on_call(1);
+    stream
+        .write_events(vec![make_event_with_id(
+            table_id,
+            event_ids.get(1).expect("Should have event 1"),
+            serde_json::json!({"seq": 2}),
+        )])
+        .await
+        .unwrap();
+
+    let (status, _) = stream.store().get_stream_state().await.unwrap();
+    assert!(
+        matches!(status, StreamStatus::Failover { .. }),
+        "Stream should be in failover after sink failure"
+    );
+
+    // Next tick: checkpoint republish succeeds (call 2), but replay publish fails (call 3)
+    sink.fail_on_call(3);
+    stream
+        .write_events(vec![make_event_with_id(
+            table_id,
+            event_ids.get(5).expect("Should have event 5"),
+            serde_json::json!({"seq": 6}),
+        )])
+        .await
+        .unwrap();
+
+    // Should still be in failover because replay failed mid-way
+    let (status, _) = stream.store().get_stream_state().await.unwrap();
+    assert!(
+        matches!(status, StreamStatus::Failover { .. }),
+        "Stream should remain in failover after mid-replay failure"
+    );
+
+    // Next tick: everything succeeds - full recovery
+    sink.succeed_always();
+    stream
+        .write_events(vec![make_event_with_id(
+            table_id,
+            event_ids.get(5).expect("Should have event 5"),
+            serde_json::json!({"seq": 6}),
+        )])
+        .await
+        .unwrap();
+
+    let (status, _) = stream.store().get_stream_state().await.unwrap();
+    assert!(
+        matches!(status, StreamStatus::Healthy),
+        "Stream should recover to Healthy after retry"
+    );
+
+    // Verify all unique event IDs were published
+    let published = sink.events().await;
+    let published_ids: HashSet<String> = published.iter().map(|e| e.id.id.clone()).collect();
+    for event_id in &event_ids {
+        assert!(
+            published_ids.contains(&event_id.id),
+            "Event {} should be in published events",
+            event_id.id
+        );
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_failover_flaky_sink_checkpoint_publish_retries() {
+    let db = TestDatabase::spawn().await;
+    let config = test_stream_config(&db);
+    let sink = FailableSink::new();
+    let (store, table_id) =
+        create_postgres_store_with_table_id(config.id, &db.config, &db.pool).await;
+
+    let stream: PgStream<FailableSink, PostgresStore> =
+        PgStream::create(config.clone(), sink.clone(), store)
+            .await
+            .expect("Failed to create PgStream");
+
+    let event_ids = insert_events_to_db(&db, 4).await;
+
+    // Event 0: success (call 0)
+    sink.succeed_always();
+    stream
+        .write_events(vec![make_event_with_id(
+            table_id,
+            event_ids.first().expect("Should have event 0"),
+            serde_json::json!({"seq": 1}),
+        )])
+        .await
+        .unwrap();
+
+    // Event 1: fail - enters failover (call 1)
+    sink.fail_on_call(1);
+    stream
+        .write_events(vec![make_event_with_id(
+            table_id,
+            event_ids.get(1).expect("Should have event 1"),
+            serde_json::json!({"seq": 2}),
+        )])
+        .await
+        .unwrap();
+
+    let (status, _) = stream.store().get_stream_state().await.unwrap();
+    assert!(
+        matches!(status, StreamStatus::Failover { .. }),
+        "Stream should be in failover after sink failure"
+    );
+
+    // Next tick: checkpoint republish fails (call 2) - sink still unavailable
+    sink.fail_on_call(2);
+    stream
+        .write_events(vec![make_event_with_id(
+            table_id,
+            event_ids.get(3).expect("Should have event 3"),
+            serde_json::json!({"seq": 4}),
+        )])
+        .await
+        .unwrap();
+
+    // Should still be in failover
+    let (status, _) = stream.store().get_stream_state().await.unwrap();
+    assert!(
+        matches!(status, StreamStatus::Failover { .. }),
+        "Stream should remain in failover when checkpoint publish fails"
+    );
+
+    // Next tick: everything succeeds - full recovery
+    sink.succeed_always();
+    stream
+        .write_events(vec![make_event_with_id(
+            table_id,
+            event_ids.get(3).expect("Should have event 3"),
+            serde_json::json!({"seq": 4}),
+        )])
+        .await
+        .unwrap();
+
+    let (status, _) = stream.store().get_stream_state().await.unwrap();
+    assert!(
+        matches!(status, StreamStatus::Healthy),
+        "Stream should recover to Healthy after checkpoint publish retry succeeds"
+    );
+
+    // Verify all unique event IDs were published
+    let published = sink.events().await;
+    let published_ids: HashSet<String> = published.iter().map(|e| e.id.id.clone()).collect();
+    for event_id in &event_ids {
+        assert!(
+            published_ids.contains(&event_id.id),
+            "Event {} should be in published events",
+            event_id.id
+        );
+    }
 }

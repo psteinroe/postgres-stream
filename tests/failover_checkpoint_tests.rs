@@ -5,7 +5,6 @@ use etl::destination::Destination;
 use etl::error::{ErrorKind, EtlResult};
 use etl::store::both::postgres::PostgresStore;
 use postgres_stream::sink::Sink;
-use postgres_stream::store::StreamStore;
 use postgres_stream::stream::PgStream;
 use postgres_stream::test_utils::{
     TestDatabase, create_postgres_store_with_table_id, insert_events_to_db, make_event_with_id,
@@ -63,7 +62,7 @@ async fn test_failover_does_not_overwrite_checkpoint_on_repeated_failures() {
         create_postgres_store_with_table_id(config.id, &db.config, &db.pool).await;
 
     let stream: PgStream<FailFirstNSink, PostgresStore> =
-        PgStream::create(config.clone(), sink, store.clone())
+        PgStream::create(config.clone(), sink, store)
             .await
             .expect("Failed to create PgStream");
 
@@ -90,8 +89,7 @@ async fn test_failover_does_not_overwrite_checkpoint_on_repeated_failures() {
         .await
         .expect("write_events should succeed even if sink fails");
 
-    let stream_store = StreamStore::create(config, store).await.unwrap();
-    let (status, _) = stream_store.get_stream_state().await.unwrap();
+    let (status, _) = stream.store().get_stream_state().await.unwrap();
 
     match status {
         StreamStatus::Failover {
