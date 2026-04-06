@@ -50,8 +50,9 @@ where
         // create stream store
         let store = StreamStore::create(config.clone(), store).await?;
 
-        // run initial maintenance synchronously during startup if due
         let (status, next_maintenance_at) = store.get_stream_state().await?;
+
+        // sync failover metric
         match &status {
             StreamStatus::Failover {
                 checkpoint_event_id,
@@ -67,6 +68,7 @@ where
             }
         }
 
+        // run initial maintenance synchronously during startup if due
         if Utc::now() >= next_maintenance_at {
             run_maintenance(&store, next_maintenance_at).await?;
             let next = next_maintenance_at + chrono::Duration::hours(24);
