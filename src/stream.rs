@@ -52,14 +52,19 @@ where
 
         // run initial maintenance synchronously during startup if due
         let (status, next_maintenance_at) = store.get_stream_state().await?;
-        if let StreamStatus::Failover {
-            checkpoint_event_id,
-        } = &status
-        {
-            warn!(
-                checkpoint_event_id = %checkpoint_event_id.id,
-                "Stream starting in failover mode; recovery will be attempted on next batch"
-            );
+        match &status {
+            StreamStatus::Failover {
+                checkpoint_event_id,
+            } => {
+                warn!(
+                    checkpoint_event_id = %checkpoint_event_id.id,
+                    "Stream starting in failover mode; recovery will be attempted on next batch"
+                );
+                metrics::record_failover_entered(config.id);
+            }
+            StreamStatus::Healthy => {
+                metrics::record_failover_recovered(config.id);
+            }
         }
 
         if Utc::now() >= next_maintenance_at {
@@ -216,8 +221,6 @@ where
         checkpoint_event_id: &EventIdentifier,
         current_batch_event_id: &EventIdentifier,
     ) -> EtlResult<bool> {
-        let failover_start = Utc::now();
-
         let checkpoint_event = self.store.get_checkpoint_event(checkpoint_event_id).await?;
 
         // Record processing lag for checkpoint event
@@ -280,10 +283,7 @@ where
             replay_client.update_checkpoint(&last_event_id).await?;
         }
 
-        // Record successful failover recovery
-        let failover_duration_milliseconds =
-            (Utc::now() - failover_start).num_milliseconds() as f64;
-        metrics::record_failover_recovered(self.config.id, failover_duration_milliseconds);
+        metrics::record_failover_recovered(self.config.id);
 
         self.store
             .store_stream_status(StreamStatus::Healthy)
@@ -292,6 +292,13 @@ where
         info!("Failover recovery completed");
 
         Ok(true)
+    }
+}
+
+#[cfg(feature = "test-utils")]
+impl<Sink, SchemaStore> PgStream<Sink, SchemaStore> {
+    pub fn store(&self) -> &StreamStore<SchemaStore> {
+        &self.store
     }
 }
 
