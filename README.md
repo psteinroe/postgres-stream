@@ -12,6 +12,9 @@
 
 Postgres Stream captures changes from your Postgres tables and delivers them to external systems like Kafka, RabbitMQ, Redis, Webhooks, and cloud services. It uses Postgres native logical replication and stores events durably in the database itself.
 
+> [!NOTE]
+> Postgres Stream is production ready and used in production for months already, processing millions of events per day.
+
 ## Key Features
 
 - **Single binary** - No complex infrastructure or high-availability destinations required
