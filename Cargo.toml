@@ -52,10 +52,11 @@ tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", defa
 tokio-rustls = { version = "0.26.2", default-features = false }
 tracing = { version = "0.1.41", default-features = false }
 tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "env-filter"] }
+sysinfo = { version = "0.38.4", default-features = false, features = ["system"] }
 x509-cert = { version = "0.2.2", default-features = false }
 
-etl          = { git = "https://github.com/supabase/etl", rev = "3122cb1c8df9649e9caaa4ee9d89e1611df29baf" }
-etl-postgres = { git = "https://github.com/supabase/etl", rev = "3122cb1c8df9649e9caaa4ee9d89e1611df29baf" }
+etl          = { git = "https://github.com/supabase/etl", rev = "b47d296cca6ea7bcb5262b627e5c93ef81f8acc2" }
+etl-postgres = { git = "https://github.com/supabase/etl", rev = "b47d296cca6ea7bcb5262b627e5c93ef81f8acc2" }
 uuid         = { version = "1.19.0", default-features = false, features = ["v4"] }
 
 # Optional sink dependencies.

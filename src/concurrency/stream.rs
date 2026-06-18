@@ -1,26 +1,44 @@
 use core::pin::Pin;
 use core::task::{Context, Poll};
 use etl::config::BatchConfig;
+use etl::types::SizeHint;
 use futures::{Future, Stream, ready};
 use pin_project_lite::pin_project;
 use std::time::Duration;
+use sysinfo::System;
+
+const MIN_BATCH_BYTES: usize = 64 * 1024;
+
+fn replay_batch_budget_bytes(batch_config: &BatchConfig) -> usize {
+    let mut system = System::new();
+    system.refresh_memory();
+
+    let total_memory_bytes = usize::try_from(system.total_memory()).unwrap_or(usize::MAX);
+    let budget = ((total_memory_bytes as f64) * f64::from(batch_config.memory_budget_ratio)).round()
+        as usize;
+
+    budget.max(MIN_BATCH_BYTES)
+}
 
 // Implementation adapted from:
 //  https://github.com/tokio-rs/tokio/blob/master/tokio-stream/src/stream_ext/chunks_timeout.rs.
 pin_project! {
-    /// A stream adapter that batches items based on size limits and timeouts.
+    /// A stream adapter that batches fallible items based on byte budget and timeouts.
     ///
     /// This stream collects items from the underlying stream into batches, emitting them when either:
-    /// - The batch reaches its maximum size
+    /// - The accumulated successful items reach the configured memory budget
     /// - A timeout occurs
+    /// - An error item is observed
     #[must_use = "streams do nothing unless polled"]
     #[derive(Debug)]
-    pub struct TimeoutBatchStream<B, S: Stream<Item = B>> {
+    pub struct TimeoutBatchStream<B, E, S: Stream<Item = Result<B, E>>> {
         #[pin]
         stream: S,
         #[pin]
         deadline: Option<tokio::time::Sleep>,
         items: Vec<S::Item>,
+        current_batch_bytes: usize,
+        max_batch_bytes: usize,
         batch_config: BatchConfig,
         reset_timer: bool,
         inner_stream_ended: bool,
@@ -28,15 +46,23 @@ pin_project! {
     }
 }
 
-impl<B, S: Stream<Item = B>> TimeoutBatchStream<B, S> {
+impl<B, E, S> TimeoutBatchStream<B, E, S>
+where
+    B: SizeHint,
+    S: Stream<Item = Result<B, E>>,
+{
     /// Creates a new [`TimeoutBatchStream`] with the given configuration.
     ///
     /// The stream will batch items according to the provided `batch_config`.
     pub fn wrap(stream: S, batch_config: BatchConfig) -> Self {
+        let max_batch_bytes = replay_batch_budget_bytes(&batch_config);
+
         TimeoutBatchStream {
             stream,
             deadline: None,
-            items: Vec::with_capacity(batch_config.max_size),
+            items: Vec::new(),
+            current_batch_bytes: 0,
+            max_batch_bytes,
             batch_config,
             reset_timer: true,
             inner_stream_ended: false,
@@ -45,14 +71,19 @@ impl<B, S: Stream<Item = B>> TimeoutBatchStream<B, S> {
     }
 }
 
-impl<B, S: Stream<Item = B>> Stream for TimeoutBatchStream<B, S> {
+impl<B, E, S> Stream for TimeoutBatchStream<B, E, S>
+where
+    B: SizeHint,
+    S: Stream<Item = Result<B, E>>,
+{
     type Item = Vec<S::Item>;
 
     /// Polls the stream for the next batch of items using a complex state machine.
     ///
     /// This method implements a batching algorithm that balances throughput
-    /// and latency by collecting items into batches based on both size and time constraints.
-    /// The polling state machine handles multiple concurrent conditions.
+    /// and latency by collecting items into batches based on both byte budget
+    /// and time constraints. The polling state machine handles multiple
+    /// concurrent conditions.
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let mut this = self.as_mut().project();
 
@@ -77,27 +108,25 @@ impl<B, S: Stream<Item = B>> Stream for TimeoutBatchStream<B, S> {
                 *this.reset_timer = false;
             }
 
-            // PRIORITY 2: Memory optimization
-            // Pre-allocate batch capacity when starting to collect items
-            // This avoids reallocations during batch collection.
-            if this.items.is_empty() {
-                this.items.reserve_exact(this.batch_config.max_size);
-            }
-
-            // PRIORITY 3: Poll underlying stream for new items
+            // PRIORITY 2: Poll underlying stream for new items
             match this.stream.as_mut().poll_next(cx) {
                 Poll::Pending => {
                     // No more items available right now, check if we should emit due to timeout.
                     break;
                 }
                 Poll::Ready(Some(item)) => {
-                    // New item available - add to current batch.
+                    if let Ok(value) = &item {
+                        *this.current_batch_bytes =
+                            this.current_batch_bytes.saturating_add(value.size_hint());
+                    }
+                    let item_is_err = item.is_err();
                     this.items.push(item);
 
-                    // SIZE-BASED EMISSION: If batch is full, emit immediately.
-                    // This provides throughput optimization for high-volume streams.
-                    if this.items.len() >= this.batch_config.max_size {
+                    // BUDGET-BASED EMISSION: If the batch reached its byte budget,
+                    // emit immediately to keep replay batches bounded.
+                    if *this.current_batch_bytes >= *this.max_batch_bytes || item_is_err {
                         *this.reset_timer = true; // Schedule timer reset for next batch.
+                        *this.current_batch_bytes = 0;
                         return Poll::Ready(Some(std::mem::take(this.items)));
                     }
                     // Continue loop to collect more items or check other conditions.
@@ -109,6 +138,7 @@ impl<B, S: Stream<Item = B>> Stream for TimeoutBatchStream<B, S> {
                         None // No final batch needed.
                     } else {
                         *this.reset_timer = true; // Clean up timer state.
+                        *this.current_batch_bytes = 0;
                         Some(std::mem::take(this.items))
                     };
 
@@ -119,16 +149,14 @@ impl<B, S: Stream<Item = B>> Stream for TimeoutBatchStream<B, S> {
             }
         }
 
-        // PRIORITY 4: Time-based emission check
-        // If we have items and the timeout has expired, emit the current batch
-        // This provides latency bounds to prevent indefinite delays in low-volume scenarios.
+        // PRIORITY 3: Time-based emission check
+        // If we have items and the timeout has expired, emit the current batch.
         if !this.items.is_empty()
             && let Some(deadline) = this.deadline.as_pin_mut()
         {
-            // Check if timeout has elapsed (this will register waker if not ready).
             ready!(deadline.poll(cx));
-            // Schedule timer reset for next batch.
             *this.reset_timer = true;
+            *this.current_batch_bytes = 0;
 
             return Poll::Ready(Some(std::mem::take(this.items)));
         }
@@ -217,7 +245,6 @@ impl<B, S: Stream<Item = B>> Stream for TimeoutStream<B, S> {
         // Check if timeout has already expired.
         let timeout_expired = this
             .deadline
-            .as_mut()
             .as_pin_mut()
             .map(|deadline| deadline.poll(cx).is_ready())
             .unwrap_or(false);

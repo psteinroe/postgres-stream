@@ -4,7 +4,6 @@
 
 use crate::{
     config::{PipelineConfig, SinkConfig},
-    migrations::migrate_etl,
     queries::get_slot_state,
     sink::{AnySink, memory::MemorySink},
     slot_recovery::handle_slot_recovery,
@@ -31,9 +30,6 @@ pub async fn start_pipeline_with_config(config: PipelineConfig) -> EtlResult<()>
     info!("starting pgstream daemon");
 
     log_config(&config);
-
-    // Run etl migrations before starting the pipeline
-    migrate_etl(&config.stream.pg_connection).await?;
 
     // Recovery loop - restarts the pipeline if slot is invalidated
     loop {
@@ -76,7 +72,8 @@ pub async fn start_pipeline_with_config(config: PipelineConfig) -> EtlResult<()>
 /// Runs the pipeline once. Returns when the pipeline completes or fails.
 async fn run_pipeline(config: &PipelineConfig) -> EtlResult<()> {
     // Initialize state store for ETL pipeline state tracking
-    let state_store = PostgresStore::new(config.stream.id, config.stream.pg_connection.clone());
+    let state_store =
+        PostgresStore::new(config.stream.id, config.stream.pg_connection.clone()).await?;
 
     // Create sink based on configuration.
     let sink = match &config.sink {
@@ -271,7 +268,7 @@ fn log_stream_config(config: &PipelineConfig) {
         dbname = stream.pg_connection.name,
         username = stream.pg_connection.username,
         tls_enabled = stream.pg_connection.tls.enabled,
-        max_batch_size = stream.batch.max_size,
+        batch_memory_budget_ratio = stream.batch.memory_budget_ratio,
         max_batch_fill_ms = stream.batch.max_fill_ms,
         "stream configuration"
     );

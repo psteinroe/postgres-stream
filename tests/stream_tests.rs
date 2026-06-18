@@ -430,7 +430,7 @@ async fn test_failover_recovery_does_not_hang_when_replay_exceeds_batch_size() {
             .await
             .expect("Failed to create PgStream");
 
-    // 250 events ensure replay window is larger than batch.max_size (100).
+    // 250 events ensure replay spans multiple replay batches under the configured memory budget.
     let event_ids = insert_events_to_db(&db, 250).await;
 
     // Event 0 succeeds.

@@ -5,7 +5,7 @@ use etl::config::{IntoConnectOptions, PgConnectionConfig};
 use sqlx::{Connection, Executor, PgConnection, PgPool, postgres::PgPoolOptions};
 use tokio::runtime::Handle;
 
-use crate::migrations::{migrate_etl, migrate_pgstream};
+use crate::migrations::migrate_pgstream;
 use crate::test_utils::test_pg_config;
 
 /// Test database wrapper with automatic cleanup on drop.
@@ -29,11 +29,6 @@ impl TestDatabase {
     pub async fn spawn() -> Self {
         let config = test_pg_config().await;
         let pool = create_pg_database(&config).await;
-
-        // Run ETL migrations first (required for PostgresStore)
-        migrate_etl(&config)
-            .await
-            .expect("Failed to run ETL migrations");
 
         // Run pgstream migrations
         migrate_pgstream(&config)
