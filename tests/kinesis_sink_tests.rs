@@ -19,6 +19,7 @@ fn make_test_event(key: &str) -> TriggeredEvent {
         stream_id: StreamId::default(),
         payload: serde_json::json!({ "key": key, "value": "test_data" }),
         metadata: Some(serde_json::json!({ "source": "test" })),
+        commit_lsn: None,
         lsn: Some(PgLsn::from(12345u64)),
     }
 }
@@ -231,6 +232,7 @@ async fn test_kinesis_sink_uses_stream_from_metadata() {
         stream_id: StreamId::default(),
         payload: serde_json::json!({ "action": "created" }),
         metadata: Some(serde_json::json!({ "stream": stream_name })),
+        commit_lsn: None,
         lsn: Some(PgLsn::from(99999u64)),
     };
 

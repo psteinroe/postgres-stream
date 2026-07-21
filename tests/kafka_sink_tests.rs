@@ -25,6 +25,7 @@ fn make_test_event(id: &str) -> TriggeredEvent {
         }),
         metadata: Some(serde_json::json!({ "source": "test" })),
         stream_id: StreamId::from(1u64),
+        commit_lsn: None,
         lsn: Some("0/16B3748".parse().unwrap()),
     }
 }
@@ -148,6 +149,7 @@ async fn test_kafka_sink_uses_topic_from_metadata() {
         }),
         metadata: Some(serde_json::json!({ "topic": topic })),
         stream_id: StreamId::from(1u64),
+        commit_lsn: None,
         lsn: Some("0/16B3748".parse().unwrap()),
     };
 

@@ -21,6 +21,7 @@ fn make_test_event(id: &str) -> TriggeredEvent {
         }),
         metadata: Some(serde_json::json!({ "source": "test" })),
         stream_id: StreamId::from(1u64),
+        commit_lsn: None,
         lsn: Some("0/16B3748".parse().unwrap()),
     }
 }
@@ -178,6 +179,7 @@ async fn test_webhook_sink_url_from_metadata() {
             "url": format!("{}/dynamic-endpoint", mock_server.uri())
         })),
         stream_id: StreamId::from(1u64),
+        commit_lsn: None,
         lsn: None,
     };
 
@@ -223,6 +225,7 @@ async fn test_webhook_sink_headers_from_metadata() {
             }
         })),
         stream_id: StreamId::from(1u64),
+        commit_lsn: None,
         lsn: None,
     };
 
@@ -250,6 +253,7 @@ async fn test_webhook_sink_no_url_configured_fails() {
         payload: serde_json::json!({ "test": "data" }),
         metadata: None,
         stream_id: StreamId::from(1u64),
+        commit_lsn: None,
         lsn: None,
     };
 

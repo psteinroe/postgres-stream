@@ -1,6 +1,7 @@
 use chrono::Duration;
 use etl::destination::Destination;
 use etl::store::both::postgres::PostgresStore;
+use etl::types::{Cell, Event, PgLsn};
 use postgres_stream::sink::memory::MemorySink;
 use postgres_stream::stream::PgStream;
 use postgres_stream::test_utils::{
@@ -37,10 +38,26 @@ async fn test_pgstream_write_events_via_destination_trait() {
         .await
         .expect("Failed to create PgStream");
 
-    let events = vec![
-        make_test_event(table_id, serde_json::json!({"id": 1, "name": "Alice"})),
-        make_test_event(table_id, serde_json::json!({"id": 2, "name": "Bob"})),
-    ];
+    let row_lsn: PgLsn = "0/100".parse().unwrap();
+    let commit_lsn: PgLsn = "0/200".parse().unwrap();
+    let events = [
+        serde_json::json!({"id": 1, "name": "Alice"}),
+        serde_json::json!({"id": 2, "name": "Bob"}),
+    ]
+    .into_iter()
+    .map(|payload| {
+        let mut event = make_test_event(table_id, payload);
+        let Event::Insert(insert_event) = &mut event else {
+            panic!("test event should be an insert");
+        };
+        insert_event.commit_lsn = commit_lsn;
+        insert_event
+            .table_row
+            .values
+            .push(Cell::String("0/100".to_string()));
+        event
+    })
+    .collect();
 
     stream
         .write_events(events)
@@ -49,6 +66,11 @@ async fn test_pgstream_write_events_via_destination_trait() {
 
     let stored_events = sink.events().await;
     assert_eq!(stored_events.len(), 2);
+    assert!(
+        stored_events
+            .iter()
+            .all(|event| event.lsn == Some(row_lsn) && event.commit_lsn == Some(commit_lsn))
+    );
 }
 
 // Failover tests

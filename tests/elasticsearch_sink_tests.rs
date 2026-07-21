@@ -22,6 +22,7 @@ fn make_test_event(key: &str) -> TriggeredEvent {
         stream_id: StreamId::default(),
         payload: serde_json::json!({ "key": key, "value": "test_data" }),
         metadata: Some(serde_json::json!({ "source": "test" })),
+        commit_lsn: None,
         lsn: Some(PgLsn::from(12345u64)),
     }
 }
@@ -131,6 +132,7 @@ async fn test_elasticsearch_sink_indexes_only_payload() {
         stream_id: StreamId::default(),
         payload: serde_json::json!({ "action": "created", "user_id": 456 }),
         metadata: Some(serde_json::json!({ "source": "api" })),
+        commit_lsn: None,
         lsn: Some(PgLsn::from(99999u64)),
     };
     let event_id = event.id.id.clone();
@@ -247,6 +249,7 @@ async fn test_elasticsearch_sink_uses_index_from_metadata() {
         stream_id: StreamId::default(),
         payload: serde_json::json!({ "routed": true }),
         metadata: Some(serde_json::json!({ "index": metadata_index })),
+        commit_lsn: None,
         lsn: None,
     };
     let event_id = event.id.id.clone();
