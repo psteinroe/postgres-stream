@@ -28,7 +28,7 @@ use tracing::{error, info, warn};
 /// If a replication slot is invalidated, this function will automatically
 /// recover by setting a failover checkpoint and restarting the pipeline.
 pub async fn start_pipeline_with_config(config: PipelineConfig) -> EtlResult<()> {
-    log_startup_configuration(&config);
+    log_config(&config);
 
     // Run etl migrations before starting the pipeline
     migrate_etl(&config.stream.pg_connection).await?;
@@ -243,7 +243,7 @@ async fn run_pipeline(config: &PipelineConfig) -> EtlResult<()> {
 }
 
 /// Logs an allowlist of safe operational configuration fields.
-fn log_startup_configuration(config: &PipelineConfig) {
+fn log_config(config: &PipelineConfig) {
     let stream = &config.stream;
     info!(
         stream_id = stream.id,
