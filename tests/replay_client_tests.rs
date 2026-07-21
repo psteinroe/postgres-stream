@@ -4,7 +4,7 @@ use postgres_stream::store::StreamStore;
 use postgres_stream::test_utils::{
     TestDatabase, create_postgres_store, insert_events_to_db, test_stream_config,
 };
-use postgres_stream::types::EventIdentifier;
+use postgres_stream::types::{EventIdentifier, convert_events_from_table_rows};
 use uuid::Uuid;
 
 // Connection tests
@@ -188,8 +188,12 @@ async fn test_get_events_copy_stream_with_events() {
         .await
         .expect("Failed to connect");
 
-    // Insert multiple events
+    // Insert multiple events with a trigger-time row LSN.
     let events = insert_events_to_db(&db, 5).await;
+    sqlx::query("UPDATE pgstream.events SET lsn = '0/100'::pg_lsn WHERE stream_id = 1")
+        .execute(&db.pool)
+        .await
+        .unwrap();
 
     // Get table schema to parse the copy stream
     let config = test_stream_config(&db);
@@ -214,14 +218,25 @@ async fn test_get_events_copy_stream_with_events() {
     let stream = TableCopyStream::wrap(stream, &table_schema.column_schemas, 1);
     pin!(stream);
 
-    let mut event_count = 0;
+    let mut table_rows = Vec::new();
     while let Some(result) = stream.next().await {
-        let _row = result.expect("Should parse row successfully");
-        event_count += 1;
+        table_rows.push(result.expect("Should parse row successfully"));
     }
 
+    let replayed_events =
+        convert_events_from_table_rows(table_rows, &table_schema.column_schemas).unwrap();
+
     // Should get events 1, 2, 3 (events between 0 and 4, exclusive)
-    assert_eq!(event_count, 3, "Should have received exactly 3 events");
+    assert_eq!(
+        replayed_events.len(),
+        3,
+        "Should have received exactly 3 events"
+    );
+    assert!(
+        replayed_events
+            .iter()
+            .all(|event| event.lsn.is_some() && event.commit_lsn.is_none())
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]

@@ -49,8 +49,12 @@ pub struct TriggeredEvent {
     pub payload: serde_json::Value,
     pub metadata: Option<serde_json::Value>,
     pub stream_id: StreamId,
+    /// The logical replication transaction commit LSN.
+    /// Available for live events and safe to use as a replica consistency watermark.
+    pub commit_lsn: Option<PgLsn>,
     /// The WAL LSN at the time the event was inserted.
-    /// Used for precise replay point lookup during slot recovery.
+    /// Used for precise replay point lookup during slot recovery, but not safe as a
+    /// replica consistency watermark because it precedes the transaction commit.
     pub lsn: Option<PgLsn>,
 }
 
@@ -78,6 +82,7 @@ macro_rules! missing {
 pub fn convert_event_from_table(
     table_row: &mut TableRow,
     column_schemas: &[ColumnSchema],
+    commit_lsn: Option<PgLsn>,
 ) -> EtlResult<TriggeredEvent> {
     let mut id = None;
     let mut created_at = None;
@@ -110,6 +115,7 @@ pub fn convert_event_from_table(
         payload: payload.ok_or_else(|| missing!("payload"))?,
         stream_id: stream_id.ok_or_else(|| missing!("stream_id"))?,
         metadata,
+        commit_lsn,
         lsn,
     })
 }
@@ -120,7 +126,7 @@ pub fn convert_events_from_table_rows(
 ) -> EtlResult<Vec<TriggeredEvent>> {
     table_rows
         .into_iter()
-        .map(|mut table_row| convert_event_from_table(&mut table_row, column_schemas))
+        .map(|mut table_row| convert_event_from_table(&mut table_row, column_schemas, None))
         .collect()
 }
 
@@ -131,10 +137,15 @@ pub fn convert_stream_events_from_events(
     events
         .into_iter()
         .filter_map(|event| match event {
-            Event::Insert(mut insert_event) => Some(convert_event_from_table(
-                &mut insert_event.table_row,
-                column_schemas,
-            )),
+            Event::Insert(mut insert_event) => {
+                let commit_lsn = Some(insert_event.commit_lsn);
+
+                Some(convert_event_from_table(
+                    &mut insert_event.table_row,
+                    column_schemas,
+                    commit_lsn,
+                ))
+            }
             Event::Begin(_)
             | Event::Commit(_)
             | Event::Update(_)
@@ -175,9 +186,9 @@ mod tests {
                 Cell::Uuid(id),
                 Cell::TimestampTz(created_at),
                 Cell::Json(payload),
-                Cell::Null,                            // metadata
-                Cell::I64(1),                          // stream_id
-                Cell::String("0/16B3748".to_string()), // lsn (parsed to PgLsn)
+                Cell::Null,                        // metadata
+                Cell::I64(1),                      // stream_id
+                Cell::String("0/100".to_string()), // lsn (parsed to PgLsn)
             ],
         }
     }
@@ -200,7 +211,7 @@ mod tests {
     }
 
     #[test]
-    fn test_convert_event_from_table_valid() {
+    fn test_convert_replayed_event_preserves_row_lsn_without_commit_lsn() {
         let column_schemas = make_column_schemas();
         let id = Uuid::new_v4();
         let created_at = Utc::now();
@@ -208,12 +219,13 @@ mod tests {
 
         let mut table_row = make_table_row(id, created_at, payload.clone());
 
-        let result = convert_event_from_table(&mut table_row, &column_schemas).unwrap();
+        let result = convert_event_from_table(&mut table_row, &column_schemas, None).unwrap();
 
         assert_eq!(result.id.id, id.to_string());
         assert_eq!(result.id.created_at, created_at);
         assert_eq!(result.payload, payload);
-        assert_eq!(result.lsn, Some("0/16B3748".parse().unwrap()));
+        assert_eq!(result.lsn, Some("0/100".parse().unwrap()));
+        assert_eq!(result.commit_lsn, None);
     }
 
     #[test]
@@ -225,12 +237,13 @@ mod tests {
 
         let mut table_row = make_table_row_without_lsn(id, created_at, payload.clone());
 
-        let result = convert_event_from_table(&mut table_row, &column_schemas).unwrap();
+        let result = convert_event_from_table(&mut table_row, &column_schemas, None).unwrap();
 
         assert_eq!(result.id.id, id.to_string());
         assert_eq!(result.id.created_at, created_at);
         assert_eq!(result.payload, payload);
         assert_eq!(result.lsn, None);
+        assert_eq!(result.commit_lsn, None);
     }
 
     #[test]
@@ -247,7 +260,7 @@ mod tests {
             ],
         };
 
-        let result = convert_event_from_table(&mut table_row, &column_schemas);
+        let result = convert_event_from_table(&mut table_row, &column_schemas, None);
 
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("Missing id"));
@@ -267,7 +280,7 @@ mod tests {
             ],
         };
 
-        let result = convert_event_from_table(&mut table_row, &column_schemas);
+        let result = convert_event_from_table(&mut table_row, &column_schemas, None);
 
         assert!(result.is_err());
         assert!(
@@ -292,7 +305,7 @@ mod tests {
             ],
         };
 
-        let result = convert_event_from_table(&mut table_row, &column_schemas);
+        let result = convert_event_from_table(&mut table_row, &column_schemas, None);
 
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("Missing payload"));
@@ -330,7 +343,7 @@ mod tests {
     }
 
     #[test]
-    fn test_convert_stream_events_from_events_filters_inserts_only() {
+    fn test_convert_live_insert_preserves_commit_lsn() {
         let column_schemas = make_column_schemas();
         let id = Uuid::new_v4();
         let ts = Utc::now();
@@ -338,7 +351,7 @@ mod tests {
         let events = vec![
             Event::Insert(InsertEvent {
                 start_lsn: PgLsn::from(0),
-                commit_lsn: PgLsn::from(0),
+                commit_lsn: "0/200".parse().unwrap(),
                 table_id: TableId::new(1),
                 table_row: make_table_row(id, ts, serde_json::json!({"test": 1})),
             }),
@@ -353,6 +366,8 @@ mod tests {
         let first = result.first().expect("first element exists");
         assert_eq!(first.id.id, id.to_string());
         assert_eq!(first.payload.get("test").and_then(|v| v.as_i64()), Some(1));
+        assert_eq!(first.lsn, Some("0/100".parse().unwrap()));
+        assert_eq!(first.commit_lsn, Some("0/200".parse().unwrap()));
     }
 
     #[test]
@@ -455,6 +470,7 @@ mod tests {
             payload: payload.clone(),
             metadata: None,
             stream_id: StreamId::from(1u64),
+            commit_lsn: Some("0/200".parse().unwrap()),
             lsn: Some("0/16B3748".parse().unwrap()),
         };
         let event2 = TriggeredEvent {
@@ -462,6 +478,7 @@ mod tests {
             payload,
             metadata: None,
             stream_id: StreamId::from(1u64),
+            commit_lsn: Some("0/200".parse().unwrap()),
             lsn: Some("0/16B3748".parse().unwrap()),
         };
 
@@ -479,6 +496,7 @@ mod tests {
             payload,
             metadata: None,
             stream_id: StreamId::from(1u64),
+            commit_lsn: None,
             lsn: None,
         };
         let (id_returned, created_at) = event.primary_keys();

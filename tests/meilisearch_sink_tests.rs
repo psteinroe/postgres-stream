@@ -22,6 +22,7 @@ fn make_test_event(key: &str) -> TriggeredEvent {
         stream_id: StreamId::default(),
         payload: serde_json::json!({ "id": id, "key": key, "value": "test_data" }),
         metadata: Some(serde_json::json!({ "source": "test" })),
+        commit_lsn: None,
         lsn: Some(PgLsn::from(12345u64)),
     }
 }
@@ -119,6 +120,7 @@ async fn test_meilisearch_sink_indexes_only_payload() {
         stream_id: StreamId::default(),
         payload: serde_json::json!({ "id": event_id, "action": "created", "user": 456 }),
         metadata: Some(serde_json::json!({ "source": "api" })),
+        commit_lsn: None,
         lsn: Some(PgLsn::from(99999u64)),
     };
 
@@ -217,6 +219,7 @@ async fn test_meilisearch_sink_uses_index_from_metadata() {
         stream_id: StreamId::default(),
         payload: serde_json::json!({ "id": event_id, "routed": true }),
         metadata: Some(serde_json::json!({ "index": metadata_index })),
+        commit_lsn: None,
         lsn: None,
     };
 

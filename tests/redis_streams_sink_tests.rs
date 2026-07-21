@@ -21,6 +21,7 @@ fn make_test_event(id: &str) -> TriggeredEvent {
         }),
         metadata: Some(serde_json::json!({ "source": "test" })),
         stream_id: StreamId::from(1u64),
+        commit_lsn: None,
         lsn: Some("0/16B3748".parse().unwrap()),
     }
 }
@@ -172,6 +173,7 @@ async fn test_redis_streams_sink_uses_stream_from_metadata() {
         }),
         metadata: Some(serde_json::json!({ "stream": stream_name })),
         stream_id: StreamId::from(1u64),
+        commit_lsn: None,
         lsn: Some("0/16B3748".parse().unwrap()),
     };
 
