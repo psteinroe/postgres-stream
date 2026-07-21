@@ -1,8 +1,10 @@
+use anyhow::Context;
 use etl::error::EtlResult;
 use postgres_stream::config::{PipelineConfig, load_config};
 use postgres_stream::core::start_pipeline_with_config;
 use postgres_stream::metrics::init_metrics;
-use tracing::{error, info};
+use std::{error::Error as StdError, fmt as stdfmt, process::ExitCode};
+use tracing::error;
 use tracing_subscriber::{EnvFilter, fmt};
 
 /// Jemalloc allocator for better memory management in high-throughput async workloads.
@@ -40,31 +42,112 @@ pub static malloc_conf: &[u8] =
 /// Loads configuration, initializes tracing, starts the async runtime,
 /// and launches the replication stream. Handles all errors and ensures
 /// proper service initialization sequence.
-fn main() -> anyhow::Result<()> {
-    // Initialize tracing subscriber for logging
+fn main() -> ExitCode {
     init_tracing();
 
-    // Load daemon configuration
-    let config = load_config::<PipelineConfig>().map_err(|c| {
-        etl::etl_error!(
-            etl::error::ErrorKind::ConfigError,
-            "failed to load configuration: {}",
-            c
-        )
-    })?;
+    match run() {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(err) => {
+            error!("an error occurred in the stream daemon: {err:#}");
+            ExitCode::FAILURE
+        }
+    }
+}
 
-    // Initialize metrics collection
+/// Loads configuration and runs the daemon.
+fn run() -> anyhow::Result<()> {
+    let config = load_pipeline_config()?;
+
     init_metrics()?;
 
-    info!(stream_id = config.stream.id, "pgstream daemon starting");
-
-    // Start the tokio runtime
     tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()?
         .block_on(async_main(config))?;
 
     Ok(())
+}
+
+/// Loads pipeline configuration while retaining the complete source chain.
+fn load_pipeline_config() -> anyhow::Result<PipelineConfig> {
+    load_config::<PipelineConfig>()
+        .map_err(|error| SafeErrorChain::from_error(&error))
+        .context("failed to load configuration")
+}
+
+/// A source-preserving error chain with configuration values redacted from each message.
+#[derive(Debug)]
+struct SafeErrorChain {
+    message: String,
+    source: Option<Box<Self>>,
+}
+
+impl SafeErrorChain {
+    fn from_error(error: &(dyn StdError + 'static)) -> Self {
+        Self {
+            message: redact_configuration_values(&error.to_string()),
+            source: error
+                .source()
+                .map(|source| Box::new(Self::from_error(source))),
+        }
+    }
+}
+
+impl stdfmt::Display for SafeErrorChain {
+    fn fmt(&self, formatter: &mut stdfmt::Formatter<'_>) -> stdfmt::Result {
+        formatter.write_str(&self.message)
+    }
+}
+
+impl StdError for SafeErrorChain {
+    fn source(&self) -> Option<&(dyn StdError + 'static)> {
+        self.source
+            .as_deref()
+            .map(|source| source as &(dyn StdError + 'static))
+    }
+}
+
+fn redact_configuration_values(message: &str) -> String {
+    let mut redacted = message.to_string();
+
+    for prefix in ["invalid type: ", "invalid value: ", "unknown variant "] {
+        redact_between(&mut redacted, prefix, ", expected");
+    }
+
+    redact_urls(&mut redacted);
+    redacted
+}
+
+fn redact_between(message: &mut String, prefix: &str, suffix: &str) {
+    let Some(start) = message.find(prefix).map(|index| index + prefix.len()) else {
+        return;
+    };
+    let Some(end) = message[start..].find(suffix).map(|index| start + index) else {
+        return;
+    };
+
+    message.replace_range(start..end, "<redacted>");
+}
+
+fn redact_urls(message: &mut String) {
+    const DELIMITERS: &[char] = &[
+        ' ', '\t', '\n', '\r', '"', '\'', '`', '<', '>', '[', ']', '(', ')',
+    ];
+
+    while let Some(scheme_end) = message.find("://") {
+        let start = message[..scheme_end]
+            .char_indices()
+            .rev()
+            .find(|(_, character)| DELIMITERS.contains(character))
+            .map_or(0, |(index, character)| index + character.len_utf8());
+        let value_end = scheme_end + 3;
+        let end = message[value_end..]
+            .char_indices()
+            .find(|(_, character)| DELIMITERS.contains(character))
+            .map_or(message.len(), |(index, _)| value_end + index);
+
+        message.replace_range(start..end, "<redacted-url>");
+    }
 }
 
 /// Main async entry point that starts the pipeline.
@@ -76,13 +159,7 @@ async fn async_main(config: PipelineConfig) -> EtlResult<()> {
     #[cfg(not(target_env = "msvc"))]
     postgres_stream::metrics::spawn_jemalloc_metrics_task(config.stream.id);
 
-    // Start the daemon with error handling
-    if let Err(err) = start_pipeline_with_config(config).await {
-        error!("an error occurred in the stream daemon: {err}");
-        return Err(err);
-    }
-
-    Ok(())
+    start_pipeline_with_config(config).await
 }
 
 /// Initializes the tracing subscriber for logging.
@@ -99,4 +176,73 @@ fn init_tracing() {
         .with_file(false)
         .with_line_number(false)
         .init();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use temp_env::with_vars;
+    use tempfile::TempDir;
+
+    #[test]
+    fn malformed_configuration_renders_the_underlying_cause() {
+        let temp_dir = TempDir::new().unwrap();
+        fs::write(temp_dir.path().join("base.yml"), "stream: [\n").unwrap();
+
+        let rendered = with_vars(
+            [
+                ("APP_CONFIG_DIR", temp_dir.path().to_str()),
+                ("APP_ENVIRONMENT", Some("prod")),
+            ],
+            || {
+                let error = load_pipeline_config().unwrap_err();
+                format!("{error:#}")
+            },
+        );
+
+        assert!(rendered.contains("failed to load configuration"));
+        assert!(rendered.contains("failed to initialize configuration builder"));
+        assert!(rendered.contains("line 2 column 1"));
+    }
+
+    #[test]
+    fn configuration_errors_do_not_render_values_or_secrets() {
+        let temp_dir = TempDir::new().unwrap();
+        let base = r#"
+stream:
+  id: 1
+  pg_connection:
+    host: localhost
+    port: 5432
+    name: postgres
+    username: postgres
+    password: null
+    tls:
+      enabled: false
+      trusted_root_certs: ""
+  batch:
+    max_size: 100
+    max_fill_ms: 50
+sink:
+  type: "redis://user:DO_NOT_LOG_THIS_SECRET@localhost:6379"
+"#;
+        fs::write(temp_dir.path().join("base.yml"), base).unwrap();
+
+        let rendered = with_vars(
+            [
+                ("APP_CONFIG_DIR", temp_dir.path().to_str()),
+                ("APP_ENVIRONMENT", Some("prod")),
+            ],
+            || {
+                let error = load_pipeline_config().unwrap_err();
+                format!("{error:#}")
+            },
+        );
+
+        assert!(rendered.contains("failed to deserialize configuration"));
+        assert!(rendered.contains("unknown variant <redacted>"));
+        assert!(!rendered.contains("DO_NOT_LOG_THIS_SECRET"));
+        assert!(!rendered.contains("redis://"));
+    }
 }

@@ -1,7 +1,7 @@
 #![allow(clippy::indexing_slicing)]
 //! Integration tests for the Redis Streams sink.
 
-#![cfg(feature = "sink-redis-streams")]
+#![cfg(all(feature = "sink-redis-streams", feature = "test-utils"))]
 
 use postgres_stream::sink::Sink;
 use postgres_stream::sink::redis_streams::{RedisStreamsSink, RedisStreamsSinkConfig};
@@ -36,6 +36,10 @@ async fn test_redis_streams_sink_publishes_events() {
         url: redis_url.clone(),
         stream_name: Some(stream_name.to_string()),
         max_len: None,
+        connection_timeout_ms: None,
+        response_timeout_ms: None,
+        connection_retries: None,
+        connection_max_delay_ms: None,
     };
 
     let sink = RedisStreamsSink::new(config)
@@ -96,6 +100,10 @@ async fn test_redis_streams_sink_with_max_len() {
         url: redis_url.clone(),
         stream_name: Some(stream_name.to_string()),
         max_len: Some(5),
+        connection_timeout_ms: None,
+        response_timeout_ms: None,
+        connection_retries: None,
+        connection_max_delay_ms: None,
     };
 
     let sink = RedisStreamsSink::new(config)
@@ -135,6 +143,10 @@ async fn test_redis_streams_sink_empty_batch() {
         url: redis_url,
         stream_name: Some("pgstream:empty-test".to_string()),
         max_len: None,
+        connection_timeout_ms: None,
+        response_timeout_ms: None,
+        connection_retries: None,
+        connection_max_delay_ms: None,
     };
 
     let sink = RedisStreamsSink::new(config)
@@ -158,6 +170,10 @@ async fn test_redis_streams_sink_uses_stream_from_metadata() {
         url: redis_url.clone(),
         stream_name: None,
         max_len: None,
+        connection_timeout_ms: None,
+        response_timeout_ms: None,
+        connection_retries: None,
+        connection_max_delay_ms: None,
     };
 
     let sink = RedisStreamsSink::new(config)

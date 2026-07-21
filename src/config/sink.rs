@@ -105,3 +105,48 @@ pub enum SinkConfig {
     #[serde(rename = "gcp-pubsub")]
     GcpPubsub(GcpPubsubSinkConfig),
 }
+
+impl SinkConfig {
+    /// Returns the stable, non-sensitive name of the configured sink.
+    pub(crate) const fn kind(&self) -> &'static str {
+        match self {
+            Self::Memory => "memory",
+
+            #[cfg(feature = "sink-elasticsearch")]
+            Self::Elasticsearch(_) => "elasticsearch",
+
+            #[cfg(feature = "sink-redis-strings")]
+            Self::RedisStrings(_) => "redis-strings",
+
+            #[cfg(feature = "sink-redis-streams")]
+            Self::RedisStreams(_) => "redis-streams",
+
+            #[cfg(feature = "sink-nats")]
+            Self::Nats(_) => "nats",
+
+            #[cfg(feature = "sink-rabbitmq")]
+            Self::Rabbitmq(_) => "rabbitmq",
+
+            #[cfg(feature = "sink-webhook")]
+            Self::Webhook(_) => "webhook",
+
+            #[cfg(feature = "sink-kafka")]
+            Self::Kafka(_) => "kafka",
+
+            #[cfg(feature = "sink-sqs")]
+            Self::Sqs(_) => "sqs",
+
+            #[cfg(feature = "sink-sns")]
+            Self::Sns(_) => "sns",
+
+            #[cfg(feature = "sink-kinesis")]
+            Self::Kinesis(_) => "kinesis",
+
+            #[cfg(feature = "sink-meilisearch")]
+            Self::Meilisearch(_) => "meilisearch",
+
+            #[cfg(feature = "sink-gcp-pubsub")]
+            Self::GcpPubsub(_) => "gcp-pubsub",
+        }
+    }
+}

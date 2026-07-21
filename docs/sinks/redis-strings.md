@@ -14,6 +14,10 @@ docker pull ghcr.io/psteinroe/postgres-stream:redis-strings-latest
 sink:
   type: redis-strings
   url: redis://localhost:6379
+  connection_timeout_ms: 1000
+  response_timeout_ms: 5000
+  connection_retries: 2
+  connection_max_delay_ms: 1000
 ```
 
 ### With Key Prefix
@@ -31,6 +35,10 @@ sink:
 |--------|------|----------|---------|-------------------|-------------|
 | `url` | string | Yes | - | No | Redis connection URL |
 | `key_prefix` | string | No | - | No | Prefix for all keys |
+| `connection_timeout_ms` | integer | No | Redis default | No | Timeout for each connection attempt |
+| `response_timeout_ms` | integer | No | Redis default | No | Timeout for command responses |
+| `connection_retries` | integer | No | Redis default | No | Number of reconnection attempts |
+| `connection_max_delay_ms` | integer | No | Redis default | No | Maximum delay between reconnect attempts |
 | `key` | - | - | - | Yes | Full key (via metadata only) |
 
 ## Key Resolution
