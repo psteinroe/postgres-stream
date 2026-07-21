@@ -54,9 +54,9 @@ fn main() -> ExitCode {
 
 /// Runs the daemon and propagates typed startup errors.
 fn try_main() -> PgStreamResult<()> {
-    let config = load_pipeline_config()?;
-
     init_tracing();
+
+    let config = load_pipeline_config()?;
     init_metrics().map_err(PgStreamError::config)?;
 
     tokio::runtime::Builder::new_multi_thread()
