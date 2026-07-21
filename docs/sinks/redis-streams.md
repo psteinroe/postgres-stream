@@ -15,6 +15,10 @@ sink:
   type: redis-streams
   url: redis://localhost:6379
   stream_name: events
+  connection_timeout_ms: 1000
+  response_timeout_ms: 5000
+  connection_retries: 2
+  connection_max_delay_ms: 1000
 ```
 
 ### With Length Limit
@@ -34,6 +38,10 @@ sink:
 | `url` | string | Yes | - | No | Redis connection URL |
 | `stream_name` | string | No | - | Yes | Default stream (can be overridden per-event) |
 | `max_len` | integer | No | - | No | Maximum stream length (uses MAXLEN ~) |
+| `connection_timeout_ms` | integer | No | Redis default | No | Timeout for each connection attempt |
+| `response_timeout_ms` | integer | No | Redis default | No | Timeout for command responses |
+| `connection_retries` | integer | No | Redis default | No | Number of reconnection attempts |
+| `connection_max_delay_ms` | integer | No | Redis default | No | Maximum delay between reconnect attempts |
 
 ## Dynamic Routing
 

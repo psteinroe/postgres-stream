@@ -74,9 +74,9 @@ impl TryFrom<String> for Environment {
             "prod" => Ok(Self::Prod),
             "staging" => Ok(Self::Staging),
             "dev" => Ok(Self::Dev),
-            other => Err(io::Error::other(format!(
-                "{other} is not a supported environment. Use either `prod`/`staging`/`dev`.",
-            ))),
+            _ => Err(io::Error::other(
+                "unsupported APP_ENVIRONMENT value; use `prod`, `staging`, or `dev`",
+            )),
         }
     }
 }

@@ -17,7 +17,7 @@ use etl::pipeline::Pipeline;
 use etl::store::both::postgres::PostgresStore;
 use sqlx::postgres::PgPoolOptions;
 use tokio::signal::unix::{SignalKind, signal};
-use tracing::{debug, error, info, warn};
+use tracing::{error, info, warn};
 
 /// Starts the pipeline daemon with the provided configuration.
 ///
@@ -28,8 +28,6 @@ use tracing::{debug, error, info, warn};
 /// If a replication slot is invalidated, this function will automatically
 /// recover by setting a failover checkpoint and restarting the pipeline.
 pub async fn start_pipeline_with_config(config: PipelineConfig) -> EtlResult<()> {
-    info!("starting pgstream daemon");
-
     log_config(&config);
 
     // Run etl migrations before starting the pipeline
@@ -98,27 +96,15 @@ async fn run_pipeline(config: &PipelineConfig) -> EtlResult<()> {
         #[cfg(feature = "sink-redis-strings")]
         SinkConfig::RedisStrings(cfg) => {
             use crate::sink::redis_strings::RedisStringsSink;
-            let s = RedisStringsSink::new(cfg.clone()).await.map_err(|e| {
-                etl::etl_error!(
-                    etl::error::ErrorKind::InvalidData,
-                    "Failed to create Redis Strings sink",
-                    e.to_string()
-                )
-            })?;
-            AnySink::RedisStrings(s)
+            let sink = RedisStringsSink::new(cfg.clone()).await?;
+            AnySink::RedisStrings(sink)
         }
 
         #[cfg(feature = "sink-redis-streams")]
         SinkConfig::RedisStreams(cfg) => {
             use crate::sink::redis_streams::RedisStreamsSink;
-            let s = RedisStreamsSink::new(cfg.clone()).await.map_err(|e| {
-                etl::etl_error!(
-                    etl::error::ErrorKind::InvalidData,
-                    "Failed to create Redis Streams sink",
-                    e.to_string()
-                )
-            })?;
-            AnySink::RedisStreams(s)
+            let sink = RedisStreamsSink::new(cfg.clone()).await?;
+            AnySink::RedisStreams(sink)
         }
 
         #[cfg(feature = "sink-nats")]
@@ -256,93 +242,17 @@ async fn run_pipeline(config: &PipelineConfig) -> EtlResult<()> {
     start_pipeline_with_shutdown(pipeline).await
 }
 
-/// Logs the daemon configuration (without secrets).
+/// Logs an allowlist of safe operational configuration fields.
 fn log_config(config: &PipelineConfig) {
-    log_stream_config(config);
-    log_sink_config(&config.sink);
-}
-
-fn log_stream_config(config: &PipelineConfig) {
     let stream = &config.stream;
-    debug!(
+    info!(
         stream_id = stream.id,
-        host = stream.pg_connection.host,
-        port = stream.pg_connection.port,
-        dbname = stream.pg_connection.name,
-        username = stream.pg_connection.username,
-        tls_enabled = stream.pg_connection.tls.enabled,
+        sink_type = config.sink.kind(),
         max_batch_size = stream.batch.max_size,
         max_batch_fill_ms = stream.batch.max_fill_ms,
-        "stream configuration"
+        tls_enabled = stream.pg_connection.tls.enabled,
+        "pgstream daemon starting"
     );
-}
-
-fn log_sink_config(config: &SinkConfig) {
-    match config {
-        SinkConfig::Memory => {
-            debug!("using memory sink");
-        }
-
-        #[cfg(feature = "sink-elasticsearch")]
-        SinkConfig::Elasticsearch(_cfg) => {
-            debug!("using elasticsearch sink");
-        }
-
-        #[cfg(feature = "sink-redis-strings")]
-        SinkConfig::RedisStrings(_cfg) => {
-            debug!("using redis-strings sink");
-        }
-
-        #[cfg(feature = "sink-redis-streams")]
-        SinkConfig::RedisStreams(_cfg) => {
-            debug!("using redis-streams sink");
-        }
-
-        #[cfg(feature = "sink-nats")]
-        SinkConfig::Nats(_cfg) => {
-            debug!("using nats sink");
-        }
-
-        #[cfg(feature = "sink-rabbitmq")]
-        SinkConfig::Rabbitmq(_cfg) => {
-            debug!("using rabbitmq sink");
-        }
-
-        #[cfg(feature = "sink-webhook")]
-        SinkConfig::Webhook(_cfg) => {
-            debug!("using webhook sink");
-        }
-
-        #[cfg(feature = "sink-kafka")]
-        SinkConfig::Kafka(_cfg) => {
-            debug!("using kafka sink");
-        }
-
-        #[cfg(feature = "sink-sqs")]
-        SinkConfig::Sqs(_cfg) => {
-            debug!("using sqs sink");
-        }
-
-        #[cfg(feature = "sink-sns")]
-        SinkConfig::Sns(_cfg) => {
-            debug!("using sns sink");
-        }
-
-        #[cfg(feature = "sink-kinesis")]
-        SinkConfig::Kinesis(_cfg) => {
-            debug!("using kinesis sink");
-        }
-
-        #[cfg(feature = "sink-meilisearch")]
-        SinkConfig::Meilisearch(_cfg) => {
-            debug!("using meilisearch sink");
-        }
-
-        #[cfg(feature = "sink-gcp-pubsub")]
-        SinkConfig::GcpPubsub(_cfg) => {
-            debug!("using gcp-pubsub sink");
-        }
-    }
 }
 
 /// Starts a pipeline and handles graceful shutdown signals.

@@ -31,7 +31,7 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
-use crate::sink::Sink;
+use crate::sink::{Sink, redis_common};
 use crate::types::TriggeredEvent;
 
 /// Configuration for the Redis Streams sink.
@@ -51,6 +51,22 @@ pub struct RedisStreamsSinkConfig {
     /// Maximum stream length (optional). Uses MAXLEN ~ for approximate trimming.
     #[serde(default)]
     pub max_len: Option<usize>,
+
+    /// Timeout for establishing a Redis connection, in milliseconds.
+    #[serde(default)]
+    pub connection_timeout_ms: Option<u64>,
+
+    /// Timeout for Redis command responses, in milliseconds.
+    #[serde(default)]
+    pub response_timeout_ms: Option<u64>,
+
+    /// Number of reconnection attempts made by the connection manager.
+    #[serde(default)]
+    pub connection_retries: Option<usize>,
+
+    /// Maximum delay between reconnection attempts, in milliseconds.
+    #[serde(default)]
+    pub connection_max_delay_ms: Option<u64>,
 }
 
 /// Configuration for the Redis Streams sink without sensitive data.
@@ -63,6 +79,18 @@ pub struct RedisStreamsSinkConfigWithoutSecrets {
 
     /// Maximum stream length (optional).
     pub max_len: Option<usize>,
+
+    /// Timeout for establishing a Redis connection, in milliseconds.
+    pub connection_timeout_ms: Option<u64>,
+
+    /// Timeout for Redis command responses, in milliseconds.
+    pub response_timeout_ms: Option<u64>,
+
+    /// Number of reconnection attempts made by the connection manager.
+    pub connection_retries: Option<usize>,
+
+    /// Maximum delay between reconnection attempts, in milliseconds.
+    pub connection_max_delay_ms: Option<u64>,
 }
 
 impl From<RedisStreamsSinkConfig> for RedisStreamsSinkConfigWithoutSecrets {
@@ -70,6 +98,10 @@ impl From<RedisStreamsSinkConfig> for RedisStreamsSinkConfigWithoutSecrets {
         Self {
             stream_name: config.stream_name,
             max_len: config.max_len,
+            connection_timeout_ms: config.connection_timeout_ms,
+            response_timeout_ms: config.response_timeout_ms,
+            connection_retries: config.connection_retries,
+            connection_max_delay_ms: config.connection_max_delay_ms,
         }
     }
 }
@@ -79,6 +111,10 @@ impl From<&RedisStreamsSinkConfig> for RedisStreamsSinkConfigWithoutSecrets {
         Self {
             stream_name: config.stream_name.clone(),
             max_len: config.max_len,
+            connection_timeout_ms: config.connection_timeout_ms,
+            response_timeout_ms: config.response_timeout_ms,
+            connection_retries: config.connection_retries,
+            connection_max_delay_ms: config.connection_max_delay_ms,
         }
     }
 }
@@ -105,11 +141,18 @@ impl RedisStreamsSink {
     /// # Errors
     ///
     /// Returns an error if the Redis connection cannot be established.
-    pub async fn new(
-        config: RedisStreamsSinkConfig,
-    ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
-        let client = redis::Client::open(config.url)?;
-        let connection = ConnectionManager::new(client).await?;
+    pub async fn new(config: RedisStreamsSinkConfig) -> EtlResult<Self> {
+        let settings = redis_common::RedisConnectionSettings {
+            connection_timeout_ms: config.connection_timeout_ms,
+            response_timeout_ms: config.response_timeout_ms,
+            connection_retries: config.connection_retries,
+            connection_max_delay_ms: config.connection_max_delay_ms,
+        };
+        let connection = redis_common::connect(config.url, settings)
+            .await
+            .map_err(|error| {
+                redis_common::map_error(error, "failed to create Redis Streams sink")
+            })?;
 
         Ok(Self {
             connection: Arc::new(Mutex::new(connection)),
@@ -165,12 +208,8 @@ impl Sink for RedisStreamsSink {
             pipe.add_command(cmd);
         }
 
-        pipe.query_async::<()>(&mut *conn).await.map_err(|e| {
-            etl::etl_error!(
-                etl::error::ErrorKind::DestinationError,
-                "Failed to XADD events to Redis stream",
-                e.to_string()
-            )
+        pipe.query_async::<()>(&mut *conn).await.map_err(|error| {
+            redis_common::map_error(error, "failed to publish events to Redis stream")
         })?;
 
         Ok(())
@@ -184,5 +223,31 @@ mod tests {
     #[test]
     fn test_sink_name() {
         assert_eq!(RedisStreamsSink::name(), "redis-streams");
+    }
+
+    #[test]
+    fn test_connection_settings_deserialize_and_remain_safe_to_serialize() {
+        let config: RedisStreamsSinkConfig = serde_yaml::from_str(
+            r#"
+url: redis://user:secret@localhost:6379
+stream_name: events
+max_len: 1000
+connection_timeout_ms: 1000
+response_timeout_ms: 5000
+connection_retries: 2
+connection_max_delay_ms: 750
+"#,
+        )
+        .unwrap();
+
+        assert_eq!(config.connection_timeout_ms, Some(1000));
+        assert_eq!(config.response_timeout_ms, Some(5000));
+        assert_eq!(config.connection_retries, Some(2));
+        assert_eq!(config.connection_max_delay_ms, Some(750));
+
+        let serialized =
+            serde_yaml::to_string(&RedisStreamsSinkConfigWithoutSecrets::from(&config)).unwrap();
+        assert!(!serialized.contains("secret"));
+        assert!(serialized.contains("response_timeout_ms: 5000"));
     }
 }

@@ -1,7 +1,7 @@
 #![allow(clippy::indexing_slicing)]
 //! Integration tests for the Redis Strings sink.
 
-#![cfg(feature = "sink-redis-strings")]
+#![cfg(all(feature = "sink-redis-strings", feature = "test-utils"))]
 
 use postgres_stream::sink::Sink;
 use postgres_stream::sink::redis_strings::{RedisStringsSink, RedisStringsSinkConfig};
@@ -34,6 +34,10 @@ async fn test_redis_strings_sink_publishes_events() {
     let config = RedisStringsSinkConfig {
         url: redis_url.clone(),
         key_prefix: None,
+        connection_timeout_ms: None,
+        response_timeout_ms: None,
+        connection_retries: None,
+        connection_max_delay_ms: None,
     };
 
     let sink = RedisStringsSink::new(config)
@@ -78,6 +82,10 @@ async fn test_redis_strings_sink_with_key_prefix() {
     let config = RedisStringsSinkConfig {
         url: redis_url.clone(),
         key_prefix: Some("pgstream".to_string()),
+        connection_timeout_ms: None,
+        response_timeout_ms: None,
+        connection_retries: None,
+        connection_max_delay_ms: None,
     };
 
     let sink = RedisStringsSink::new(config)
@@ -114,6 +122,10 @@ async fn test_redis_strings_sink_empty_batch() {
     let config = RedisStringsSinkConfig {
         url: redis_url,
         key_prefix: None,
+        connection_timeout_ms: None,
+        response_timeout_ms: None,
+        connection_retries: None,
+        connection_max_delay_ms: None,
     };
 
     let sink = RedisStringsSink::new(config)
@@ -134,6 +146,10 @@ async fn test_redis_strings_sink_uses_key_from_metadata() {
     let config = RedisStringsSinkConfig {
         url: redis_url.clone(),
         key_prefix: None,
+        connection_timeout_ms: None,
+        response_timeout_ms: None,
+        connection_retries: None,
+        connection_max_delay_ms: None,
     };
 
     let sink = RedisStringsSink::new(config)

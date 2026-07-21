@@ -1,9 +1,11 @@
-use etl::error::EtlResult;
+use crate::error::{PgStreamError, PgStreamResult};
 use postgres_stream::config::{PipelineConfig, load_config};
 use postgres_stream::core::start_pipeline_with_config;
 use postgres_stream::metrics::init_metrics;
-use tracing::{error, info};
+use std::process::ExitCode;
 use tracing_subscriber::{EnvFilter, fmt};
+
+mod error;
 
 /// Jemalloc allocator for better memory management in high-throughput async workloads.
 #[cfg(not(target_env = "msvc"))]
@@ -40,25 +42,23 @@ pub static malloc_conf: &[u8] =
 /// Loads configuration, initializes tracing, starts the async runtime,
 /// and launches the replication stream. Handles all errors and ensures
 /// proper service initialization sequence.
-fn main() -> anyhow::Result<()> {
-    // Initialize tracing subscriber for logging
+fn main() -> ExitCode {
+    match try_main() {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => {
+            eprintln!("{}", error.render_report());
+            ExitCode::FAILURE
+        }
+    }
+}
+
+/// Runs the daemon and propagates typed startup errors.
+fn try_main() -> PgStreamResult<()> {
     init_tracing();
 
-    // Load daemon configuration
-    let config = load_config::<PipelineConfig>().map_err(|c| {
-        etl::etl_error!(
-            etl::error::ErrorKind::ConfigError,
-            "failed to load configuration: {}",
-            c
-        )
-    })?;
+    let config = load_pipeline_config()?;
+    init_metrics().map_err(PgStreamError::config)?;
 
-    // Initialize metrics collection
-    init_metrics()?;
-
-    info!(stream_id = config.stream.id, "pgstream daemon starting");
-
-    // Start the tokio runtime
     tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()?
@@ -67,20 +67,20 @@ fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
+fn load_pipeline_config() -> PgStreamResult<PipelineConfig> {
+    load_config::<PipelineConfig>().map_err(PgStreamError::config)
+}
+
 /// Main async entry point that starts the pipeline.
 ///
 /// Launches the stream with the provided configuration and captures
 /// any errors for logging and error handling.
-async fn async_main(config: PipelineConfig) -> EtlResult<()> {
+async fn async_main(config: PipelineConfig) -> PgStreamResult<()> {
     // Start the jemalloc metrics collection background task.
     #[cfg(not(target_env = "msvc"))]
     postgres_stream::metrics::spawn_jemalloc_metrics_task(config.stream.id);
 
-    // Start the daemon with error handling
-    if let Err(err) = start_pipeline_with_config(config).await {
-        error!("an error occurred in the stream daemon: {err}");
-        return Err(err);
-    }
+    start_pipeline_with_config(config).await?;
 
     Ok(())
 }
@@ -99,4 +99,31 @@ fn init_tracing() {
         .with_file(false)
         .with_line_number(false)
         .init();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use temp_env::with_vars;
+    use tempfile::TempDir;
+
+    #[test]
+    fn malformed_configuration_renders_the_underlying_cause() {
+        let temp_dir = TempDir::new().unwrap();
+        fs::write(temp_dir.path().join("base.yml"), "stream: [\n").unwrap();
+
+        let report = with_vars(
+            [
+                ("APP_CONFIG_DIR", temp_dir.path().to_str()),
+                ("APP_ENVIRONMENT", Some("prod")),
+            ],
+            || load_pipeline_config().unwrap_err().render_report(),
+        );
+
+        assert!(report.contains("category: configuration error"));
+        assert!(report.contains("failed to initialize configuration builder"));
+        assert!(report.contains("cause 2:"));
+        assert!(report.contains("line 2 column 1"));
+    }
 }

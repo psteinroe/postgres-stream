@@ -7,6 +7,9 @@ pub mod elasticsearch;
 #[cfg(feature = "sink-nats")]
 pub mod nats;
 
+#[cfg(any(feature = "sink-redis-strings", feature = "sink-redis-streams"))]
+mod redis_common;
+
 #[cfg(feature = "sink-redis-strings")]
 pub mod redis_strings;
 
