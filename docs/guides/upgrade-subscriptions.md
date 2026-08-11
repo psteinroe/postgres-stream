@@ -9,7 +9,7 @@ The breaking-change release stops installing subscription SQL through the pgstre
 3. Identify the owner of every subscribed table.
 4. Connect as a role that can administer the legacy pgstream objects and is the owner, or a member of the owner role, for every subscribed table.
 
-The migration preserves subscription rows and target triggers, but future calls to `set_subscriptions()` need the package owner to drop and recreate those triggers.
+The migration preserves subscription rows and target triggers. Future subscription changes run under the new package owner, which must be able to drop and recreate those triggers.
 
 ## Run the upgrade
 
@@ -27,7 +27,6 @@ The script runs in a transaction and:
 2. Moves the subscription enum, table, helper functions, and generated functions with `ALTER ... SET SCHEMA`.
 3. Transfers ownership to the role running the migration.
 4. Replaces the coordinator body so future trigger rebuilds use the new schema.
-5. Adds `pgstream_subscriptions.set_subscriptions()`.
 
 `ALTER ... SET SCHEMA` preserves table rows, object OIDs, and dependencies. Existing subscription UUIDs and target-trigger function references are not recreated.
 
@@ -51,4 +50,4 @@ After verification, deploy the new pgstream version. Its core migration accepts 
 
 ## Rollback
 
-The upgrade is atomic before commit. If it fails, PostgreSQL rolls back the schema and ownership moves. After commit, restore the database backup or write a reverse migration appropriate for your customized ownership and schema choices.
+The upgrade is atomic before commit. If it fails, Postgres rolls back the schema and ownership moves. After commit, restore the database backup or write a reverse migration appropriate for your customized ownership and schema choices.

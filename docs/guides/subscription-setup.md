@@ -4,11 +4,11 @@ Subscriptions are an optional SQL package that you install through your own data
 
 ## Ownership model
 
-Subscription changes drop and recreate target-table triggers. PostgreSQL requires the role dropping a trigger to own its table. Run the package migration as the application migration role that owns subscribed tables, or as a role that is a member of all relevant owner roles.
+Subscription changes drop and recreate target-table triggers. Postgres requires the role dropping a trigger to own its table. Run the package migration as the application migration role that owns subscribed tables, or as a role that is a member of all relevant owner roles.
 
 This privilege belongs to the database deployment path, not the long-lived pgstream runtime role.
 
-The package accepts trusted SQL through `when_clause`, `payload_extensions`, and `metadata_extensions`. Only trusted database deployment roles should be able to change subscriptions or execute `set_subscriptions()`.
+The package accepts trusted SQL through `when_clause`, `payload_extensions`, and `metadata_extensions`. Only trusted database deployment roles should be able to change subscriptions.
 
 ## Install
 
@@ -30,29 +30,19 @@ The installer needs:
 - `INSERT` on `pgstream.events`.
 - Permission to create and own `pgstream_subscriptions`.
 
-## Grant subscription deployment
-
-The installer revokes public execution of `set_subscriptions()`. Grant it only to your trusted migration role:
-
-```sql
-grant usage on schema pgstream_subscriptions to application_migrator;
-grant execute on function pgstream_subscriptions.set_subscriptions(
-  bigint,
-  pgstream_subscriptions.subscriptions[]
-) to application_migrator;
-```
-
 The pgstream runtime role does not need access to this schema or ownership of application tables.
 
-## Reconcile subscriptions
+## Optional reconciliation helper
 
-Use `pgstream_subscriptions.set_subscriptions()` to supply the complete desired set for a stream. It inserts missing definitions, updates changed definitions, and deletes omitted definitions. Unchanged rows are not written, avoiding unnecessary trigger recreation.
+The package does not install `set_subscriptions()`. If you want to reconcile the complete desired subscription set for a stream, copy the optional [`examples/set_subscriptions.sql`](https://github.com/psteinroe/postgres-stream/blob/main/extensions/subscriptions/examples/set_subscriptions.sql) function into your own migrations and adapt it as needed.
 
-See [Subscriptions](../concepts/subscriptions.md) and the [complete SQL example](https://github.com/psteinroe/postgres-stream/blob/main/extensions/subscriptions/examples/set_subscriptions.sql).
+The migration role that creates the function already owns it and can execute it; no additional `EXECUTE` grant is needed. Add grants only when intentionally delegating the helper to another trusted role.
+
+See [Subscriptions](../concepts/subscriptions.md) for its behavior.
 
 ## Customize
 
-The package is intentionally plain SQL rather than a PostgreSQL `CREATE EXTENSION` package. You may copy and change:
+The package is intentionally plain SQL rather than a Postgres `CREATE EXTENSION` package. You may copy and change:
 
 - The `pgstream_subscriptions` schema name.
 - Ownership and grants.

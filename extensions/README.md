@@ -1,7 +1,7 @@
 # Database extensions
 
 This directory contains optional, user-installed SQL packages for pgstream.
-These are not PostgreSQL `CREATE EXTENSION` packages and are never installed or
+These are not Postgres `CREATE EXTENSION` packages and are never installed or
 migrated by the pgstream daemon.
 
 Copy the relevant SQL into your application's migration system, review it, and

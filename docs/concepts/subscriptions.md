@@ -111,30 +111,9 @@ Both subscriptions will fire for a verified user, creating two events with diffe
 
 ## Reconciling a Stream
 
-Each changed subscription recreates its target trigger. The package provides `set_subscriptions()` so deployments can supply the complete desired set for one stream without rewriting unchanged rows:
+Each changed subscription recreates its target trigger. The package includes an optional [`set_subscriptions()` example](https://github.com/psteinroe/postgres-stream/blob/main/extensions/subscriptions/examples/set_subscriptions.sql) that you can copy into your own migrations; it is not installed by default.
 
-```sql
-select pgstream_subscriptions.set_subscriptions(
-  1,
-  array[
-    row(
-      null::uuid,
-      'user-created',
-      1::bigint,
-      'INSERT'::pgstream_subscriptions.operation_type,
-      'public',
-      'users',
-      null::text,
-      array['id', 'email']::text[],
-      null::jsonb,
-      '[]'::jsonb,
-      '[]'::jsonb
-    )::pgstream_subscriptions.subscriptions
-  ]
-);
-```
-
-The array is the complete desired state for stream `1`: missing rows are inserted, changed rows are updated, and omitted rows are deleted. See the [package example](https://github.com/psteinroe/postgres-stream/blob/main/extensions/subscriptions/examples/set_subscriptions.sql).
+The helper accepts the complete desired state for one stream: missing rows are inserted, changed rows are updated, and omitted rows are deleted. Unchanged rows are not written, avoiding unnecessary trigger recreation.
 
 ## Next Steps
 

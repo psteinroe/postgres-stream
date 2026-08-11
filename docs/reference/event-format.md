@@ -170,9 +170,9 @@ They don't have trigger metadata unless you include it.
 
 ## Data Type Mapping
 
-PostgreSQL types are serialized to JSON:
+Postgres types are serialized to JSON:
 
-| PostgreSQL | JSON |
+| Postgres | JSON |
 |------------|------|
 | integer, bigint | number |
 | numeric, decimal | number |

@@ -9,6 +9,8 @@ const EXTRACT_SUBSCRIPTIONS: &str =
     include_str!("../migrations/1786434463000_extract_subscriptions.sql");
 const INSTALL_SUBSCRIPTIONS: &str =
     include_str!("../extensions/subscriptions/migrations/0001_create_pgstream_subscriptions.sql");
+const SET_SUBSCRIPTIONS_EXAMPLE: &str =
+    include_str!("../extensions/subscriptions/examples/set_subscriptions.sql");
 const UPGRADE_SUBSCRIPTIONS: &str =
     include_str!("../extensions/subscriptions/upgrades/from-pgstream-0.1.sql");
 const UNINSTALL_SUBSCRIPTIONS: &str = include_str!("../extensions/subscriptions/uninstall.sql");
@@ -92,10 +94,22 @@ async fn core_migrations_do_not_install_subscriptions() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn set_subscriptions_reconciles_and_skips_unchanged_definitions() {
+async fn optional_set_subscriptions_reconciles_and_skips_unchanged_definitions() {
     let database = TestDatabase::spawn_with_subscriptions().await;
     create_users_table(&database).await;
 
+    let installed_by_default: bool = sqlx::query_scalar(
+        "select to_regprocedure('pgstream_subscriptions.set_subscriptions(bigint, pgstream_subscriptions.subscriptions[])') is not null",
+    )
+    .fetch_one(&database.pool)
+    .await
+    .expect("Failed to inspect optional helper");
+    assert!(!installed_by_default);
+
+    sqlx::raw_sql(SET_SUBSCRIPTIONS_EXAMPLE)
+        .execute(&database.pool)
+        .await
+        .expect("Failed to install optional set_subscriptions example");
     set_user_subscription(&database).await;
     let initial_trigger_oid = insert_trigger_oid(&database).await;
 
@@ -276,6 +290,10 @@ async fn package_owner_manages_triggers_without_runtime_table_privileges() {
 async fn uninstall_removes_package_and_managed_triggers() {
     let database = TestDatabase::spawn_with_subscriptions().await;
     create_users_table(&database).await;
+    sqlx::raw_sql(SET_SUBSCRIPTIONS_EXAMPLE)
+        .execute(&database.pool)
+        .await
+        .expect("Failed to install optional set_subscriptions example");
     set_user_subscription(&database).await;
 
     sqlx::raw_sql(UNINSTALL_SUBSCRIPTIONS)

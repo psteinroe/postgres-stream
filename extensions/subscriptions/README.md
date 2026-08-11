@@ -8,7 +8,7 @@ by the pgstream daemon.
 ## Why installation is separate
 
 Changing subscriptions drops and recreates triggers on their target tables.
-PostgreSQL requires the role dropping a trigger to own its table. Install this
+Postgres requires the role dropping a trigger to own its table. Install this
 package as the application migration role that owns the subscribed tables (or a
 role that is a member of their owner roles). The long-lived pgstream runtime
 role does not need application-table ownership.
@@ -36,19 +36,16 @@ The installing role needs `USAGE` on `pgstream` and `INSERT` on
 `pgstream.events`. It also needs ownership of every target table so future
 subscription changes can drop their triggers.
 
-`set_subscriptions` is not executable by `PUBLIC`. Grant it only to the trusted
-role that deploys subscription definitions:
+## Optional reconciliation helper
 
-```sql
-grant usage on schema pgstream_subscriptions to application_migrator;
-grant execute on function pgstream_subscriptions.set_subscriptions(
-  bigint,
-  pgstream_subscriptions.subscriptions[]
-) to application_migrator;
-```
+The package does not install `set_subscriptions()`. The optional
+[`examples/set_subscriptions.sql`](examples/set_subscriptions.sql) defines the
+helper documented in the subscription guide. Copy it into your own migrations
+and adapt its interface or security settings as needed.
 
-See [`examples/set_subscriptions.sql`](examples/set_subscriptions.sql) for a
-complete reconciliation call.
+The migration role that creates the function owns it and can execute it without
+an additional grant. Add grants only if you intentionally delegate execution to
+another role.
 
 ## Upgrade from pgstream 0.1
 
@@ -57,7 +54,7 @@ Before starting the breaking-change pgstream version, copy and run
 can administer both the legacy pgstream objects and all subscribed tables.
 
 The migration moves objects with `ALTER ... SET SCHEMA`. It does not copy
-subscription rows or recreate target triggers: PostgreSQL preserves object OIDs
+subscription rows or recreate target triggers: Postgres preserves object OIDs
 and dependencies while moving them. It updates ownership and replaces only the
 coordinator function body so future subscription changes use the new schema.
 
