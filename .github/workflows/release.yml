@@ -2,6 +2,11 @@ name: Release
 
 on:
   workflow_dispatch:
+    inputs:
+      version:
+        description: Release tag (for example, 0.2.0). Leave blank to calculate it from commits.
+        required: false
+        type: string
 
 permissions:
   contents: write
@@ -31,7 +36,26 @@ jobs:
 
       - name: Set version name
         id: set_version
-        run: echo "version=$(git cliff --bumped-version)" >> "$GITHUB_OUTPUT"
+        env:
+          REQUESTED_VERSION: ${{ inputs.version }}
+        run: |
+          if [[ -n "$REQUESTED_VERSION" ]]; then
+            if [[ ! "$REQUESTED_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+              echo "Invalid release version: $REQUESTED_VERSION"
+              exit 1
+            fi
+
+            if git rev-parse --verify --quiet "refs/tags/$REQUESTED_VERSION"; then
+              echo "Release tag already exists: $REQUESTED_VERSION"
+              exit 1
+            fi
+
+            VERSION="$REQUESTED_VERSION"
+          else
+            VERSION="$(git cliff --bumped-version)"
+          fi
+
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
   test:
     name: Test Release Build
@@ -91,7 +115,7 @@ jobs:
         id: changelog
         with:
           config: cliff.toml
-          args: --bump --unreleased
+          args: --tag ${{ needs.extract_version.outputs.version }} --unreleased
         env:
           GITHUB_REPO: ${{ github.repository }}
 
