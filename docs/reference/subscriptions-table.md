@@ -1,26 +1,37 @@
 # Subscriptions Table Reference
 
-Schema reference for `pgstream.subscriptions`.
+Schema reference for `pgstream_subscriptions.subscriptions`.
 
 ## Schema
 
 ```sql
-create table pgstream.subscriptions (
+create table pgstream_subscriptions.subscriptions (
+  id uuid primary key default pgstream.portable_uuidv7(),
   key text not null,
-  stream_id bigint not null,
-  operation text not null,
+  stream_id bigint,
+  operation pgstream_subscriptions.operation_type not null,
   schema_name text not null,
   table_name text not null,
   when_clause text,
-  column_names text[],
+  column_names text[] not null,
   metadata jsonb,
-  payload_extensions jsonb,
-  metadata_extensions jsonb,
-  primary key (key, stream_id)
+  payload_extensions jsonb default '[]'::jsonb,
+  metadata_extensions jsonb default '[]'::jsonb,
+  unique (stream_id, key, schema_name, table_name, operation)
 );
 ```
 
 ## Columns
+
+### `id`
+
+| | |
+|--|--|
+| Type | uuid |
+| Required | Generated automatically |
+| Primary Key | Yes |
+
+Stable identifier generated with `pgstream.portable_uuidv7()`.
 
 ### `key`
 
@@ -28,17 +39,17 @@ create table pgstream.subscriptions (
 |--|--|
 | Type | text |
 | Required | Yes |
-| Primary Key | Yes (with stream_id) |
+| Unique | With stream, schema, table, and operation |
 
-Unique identifier for the subscription within a stream. Used as `tg_name` in generated events.
+Identifier for the subscription. Used as `tg_name` in generated events.
 
 ### `stream_id`
 
 | | |
 |--|--|
 | Type | bigint |
-| Required | Yes |
-| Primary Key | Yes (with key) |
+| Required | Recommended |
+| Primary Key | No |
 
 Must match the `stream.id` in your config. Links the subscription to a specific Postgres Stream instance.
 
@@ -91,10 +102,9 @@ Examples:
 | | |
 |--|--|
 | Type | text[] |
-| Required | No |
-| Default | All columns |
+| Required | Yes |
 
-Array of column names to include in the event payload. If null, all columns are included.
+Array of column names to include in the event payload.
 
 Example:
 ```sql
@@ -191,4 +201,4 @@ When you insert, update, or delete a subscription:
 2. New database triggers are created/modified on target tables
 3. Existing triggers are dropped if no subscriptions remain
 
-This happens automatically via internal triggers on the subscriptions table.
+This happens through internal triggers installed by the optional subscription SQL package. The package is owned by your database migration role; the pgstream daemon does not perform this DDL.

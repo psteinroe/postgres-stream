@@ -8,7 +8,7 @@ use std::time::Duration;
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_insert_and_update_share_commit_lsn_distinct_from_row_lsns() {
-    let db = TestDatabase::spawn().await;
+    let db = TestDatabase::spawn_with_subscriptions().await;
     db.ensure_today_partition().await;
 
     sqlx::query(
@@ -29,10 +29,10 @@ async fn test_insert_and_update_share_commit_lsn_distinct_from_row_lsns() {
     for (key, operation) in [("user_insert", "INSERT"), ("user_update", "UPDATE")] {
         sqlx::query(
             r#"
-            insert into pgstream.subscriptions
+            insert into pgstream_subscriptions.subscriptions
                 (key, stream_id, operation, schema_name, table_name, column_names, payload_extensions, metadata_extensions)
             values
-                ($1, $2, $3::pgstream.operation_type, 'public', 'users', array['id', 'name'], '[]', '[]')
+                ($1, $2, $3::pgstream_subscriptions.operation_type, 'public', 'users', array['id', 'name'], '[]', '[]')
             "#,
         )
         .bind(key)

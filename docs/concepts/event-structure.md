@@ -32,10 +32,10 @@ The event body sent to your sink. Contains the row data and trigger context.
 
 ### Selecting Columns
 
-By default, all columns are included. Use `column_names` to select specific columns:
+Use `column_names` to select the columns included in each event:
 
 ```sql
-INSERT INTO pgstream.subscriptions (key, stream_id, operation, schema_name, table_name, column_names)
+INSERT INTO pgstream_subscriptions.subscriptions (key, stream_id, operation, schema_name, table_name, column_names)
 VALUES ('user-created', 1, 'INSERT', 'public', 'users', ARRAY['id', 'email']);
 ```
 
@@ -44,8 +44,8 @@ VALUES ('user-created', 1, 'INSERT', 'public', 'users', ARRAY['id', 'email']);
 Routing configuration read by sinks. Controls where and how events are delivered.
 
 ```sql
-INSERT INTO pgstream.subscriptions (key, stream_id, operation, schema_name, table_name, metadata)
-VALUES ('user-created', 1, 'INSERT', 'public', 'users', '{"topic": "users", "priority": "high"}');
+INSERT INTO pgstream_subscriptions.subscriptions (key, stream_id, operation, schema_name, table_name, column_names, metadata)
+VALUES ('user-created', 1, 'INSERT', 'public', 'users', ARRAY['id', 'email'], '{"topic": "users", "priority": "high"}');
 ```
 
 Each sink reads specific metadata fields:

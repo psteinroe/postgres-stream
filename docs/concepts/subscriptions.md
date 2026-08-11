@@ -4,12 +4,12 @@ Define which table changes to capture and how they should be formatted.
 
 ## Overview
 
-Subscriptions are stored in the `pgstream.subscriptions` table. When you insert, update, or delete a subscription, Postgres Stream automatically creates or updates the corresponding database triggers.
+Subscriptions are provided by an [optional, user-installed SQL package](../guides/subscription-setup.md) and stored in `pgstream_subscriptions.subscriptions`. When you insert, update, or delete a subscription, the package drops and recreates the corresponding database triggers. The pgstream daemon does not manage these triggers.
 
 ## Creating a Subscription
 
 ```sql
-insert into pgstream.subscriptions (
+insert into pgstream_subscriptions.subscriptions (
   key,
   stream_id,
   operation,
@@ -40,7 +40,7 @@ insert into pgstream.subscriptions (
 | `schema_name` | text | Yes | Database schema (usually `public`) |
 | `table_name` | text | Yes | Target table name |
 | `when_clause` | text | No | SQL expression to filter events |
-| `column_names` | text[] | No | Columns to include in payload (null = all) |
+| `column_names` | text[] | Yes | Columns to include in the payload |
 | `payload_extensions` | jsonb | No | Computed fields to add to payload |
 | `metadata` | jsonb | No | Static routing metadata |
 | `metadata_extensions` | jsonb | No | Dynamic routing metadata |
@@ -51,23 +51,23 @@ Use `when_clause` to capture only specific events:
 
 ```sql
 -- Only capture high-value orders
-insert into pgstream.subscriptions (key, stream_id, operation, schema_name, table_name, when_clause)
-values ('high-value-orders', 1, 'INSERT', 'public', 'orders', 'new.total > 1000');
+insert into pgstream_subscriptions.subscriptions (key, stream_id, operation, schema_name, table_name, when_clause, column_names)
+values ('high-value-orders', 1, 'INSERT', 'public', 'orders', 'new.total > 1000', array['id', 'total']);
 
 -- Only capture status changes
-insert into pgstream.subscriptions (key, stream_id, operation, schema_name, table_name, when_clause)
-values ('status-changed', 1, 'UPDATE', 'public', 'orders', 'old.status IS DISTINCT FROM new.status');
+insert into pgstream_subscriptions.subscriptions (key, stream_id, operation, schema_name, table_name, when_clause, column_names)
+values ('status-changed', 1, 'UPDATE', 'public', 'orders', 'old.status IS DISTINCT FROM new.status', array['id', 'status']);
 ```
 
 The `when_clause` is a SQL expression. Use `new` to reference the new row (INSERT/UPDATE) and `old` for the previous row (UPDATE/DELETE).
 
 ## Selecting Columns
 
-By default, all columns are included. Use `column_names` to select specific columns:
+Use `column_names` to select the columns included in the payload:
 
 ```sql
 -- Only include id, email, and created_at
-insert into pgstream.subscriptions (key, stream_id, operation, schema_name, table_name, column_names)
+insert into pgstream_subscriptions.subscriptions (key, stream_id, operation, schema_name, table_name, column_names)
 values ('user-created', 1, 'INSERT', 'public', 'users', array['id', 'email', 'created_at']);
 ```
 
@@ -99,77 +99,42 @@ You can have multiple subscriptions on the same table:
 
 ```sql
 -- Capture all user inserts
-insert into pgstream.subscriptions (key, stream_id, operation, schema_name, table_name)
-values ('all-users', 1, 'INSERT', 'public', 'users');
+insert into pgstream_subscriptions.subscriptions (key, stream_id, operation, schema_name, table_name, column_names)
+values ('all-users', 1, 'INSERT', 'public', 'users', array['id', 'email', 'email_verified']);
 
 -- Also capture verified users separately
-insert into pgstream.subscriptions (key, stream_id, operation, schema_name, table_name, when_clause)
-values ('verified-users', 1, 'INSERT', 'public', 'users', 'new.email_verified = true');
+insert into pgstream_subscriptions.subscriptions (key, stream_id, operation, schema_name, table_name, when_clause, column_names)
+values ('verified-users', 1, 'INSERT', 'public', 'users', 'new.email_verified = true', array['id', 'email']);
 ```
 
 Both subscriptions will fire for a verified user, creating two events with different `tg_name` values.
 
-## Avoiding Unnecessary Trigger Recreation
+## Reconciling a Stream
 
-Each subscription change recreates the trigger, which can be expensive. Use MERGE to only update when values actually change:
+Each changed subscription recreates its target trigger. The package provides `set_subscriptions()` so deployments can supply the complete desired set for one stream without rewriting unchanged rows:
 
 ```sql
-create or replace function set_subscriptions(
-  p_stream_id bigint,
-  p_subscriptions pgstream.subscriptions[]
-)
-returns void
-language plpgsql
-security definer
-set search_path to ''
-as $$
-begin
-  create temporary table temp_subscriptions as
-  select * from unnest(p_subscriptions);
-
-  -- Only update if values actually changed (avoids trigger recreation)
-  merge into pgstream.subscriptions as target
-  using temp_subscriptions as source
-  on (target.key = source.key and target.stream_id = p_stream_id)
-  when matched and (
-    target.operation is distinct from source.operation or
-    target.schema_name is distinct from source.schema_name or
-    target.table_name is distinct from source.table_name or
-    target.when_clause is distinct from source.when_clause or
-    target.column_names is distinct from source.column_names or
-    target.metadata is distinct from source.metadata or
-    target.payload_extensions is distinct from source.payload_extensions or
-    target.metadata_extensions is distinct from source.metadata_extensions
-  ) then update set
-    operation = source.operation,
-    schema_name = source.schema_name,
-    table_name = source.table_name,
-    when_clause = source.when_clause,
-    column_names = source.column_names,
-    metadata = source.metadata,
-    payload_extensions = source.payload_extensions,
-    metadata_extensions = source.metadata_extensions
-  when not matched then insert (
-    key, stream_id, operation, schema_name, table_name,
-    when_clause, column_names, metadata, payload_extensions, metadata_extensions
-  ) values (
-    source.key, p_stream_id, source.operation, source.schema_name,
-    source.table_name, source.when_clause, source.column_names,
-    source.metadata, source.payload_extensions, source.metadata_extensions
-  );
-
-  -- Remove subscriptions not in input
-  delete from pgstream.subscriptions
-  where stream_id = p_stream_id
-    and not exists (
-      select 1 from temp_subscriptions
-      where pgstream.subscriptions.key = temp_subscriptions.key
-    );
-
-  drop table temp_subscriptions;
-end;
-$$;
+select pgstream_subscriptions.set_subscriptions(
+  1,
+  array[
+    row(
+      null::uuid,
+      'user-created',
+      1::bigint,
+      'INSERT'::pgstream_subscriptions.operation_type,
+      'public',
+      'users',
+      null::text,
+      array['id', 'email']::text[],
+      null::jsonb,
+      '[]'::jsonb,
+      '[]'::jsonb
+    )::pgstream_subscriptions.subscriptions
+  ]
+);
 ```
+
+The array is the complete desired state for stream `1`: missing rows are inserted, changed rows are updated, and omitted rows are deleted. See the [package example](https://github.com/psteinroe/postgres-stream/blob/main/extensions/subscriptions/examples/set_subscriptions.sql).
 
 ## Next Steps
 

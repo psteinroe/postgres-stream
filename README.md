@@ -28,7 +28,7 @@ Events are inserted into the `pgstream.events` table and streamed via logical re
 
 **Two ways to create events:**
 
-1. **Subscriptions** (optional) - Define triggers that automatically capture table changes
+1. **Subscriptions** (optional) - Install the user-managed SQL package in `extensions/subscriptions` to capture table changes with triggers
 2. **Manual inserts** - Insert directly into `pgstream.events` from your application or database functions
 
 ## Trade-offs

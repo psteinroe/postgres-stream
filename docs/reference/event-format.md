@@ -73,7 +73,7 @@ Unix timestamp in milliseconds when the event was created.
 
 The new row values. Present for `INSERT` and `UPDATE` operations.
 
-Contains only the columns specified in `column_names`, or all columns if not specified.
+Contains the columns specified in `column_names`.
 
 ### `old`
 
@@ -83,7 +83,7 @@ Contains only the columns specified in `column_names`, or all columns if not spe
 
 The previous row values. Present for `UPDATE` and `DELETE` operations.
 
-Contains only the columns specified in `column_names`, or all columns if not specified.
+Contains the columns specified in `column_names`.
 
 ## Operation-Specific Structure
 

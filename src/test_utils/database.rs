@@ -61,6 +61,23 @@ impl TestDatabase {
         }
     }
 
+    /// Creates a migrated database with the optional subscription SQL package.
+    pub async fn spawn_with_subscriptions() -> Self {
+        let database = Self::spawn().await;
+        database.install_subscriptions().await;
+        database
+    }
+
+    /// Installs the user-managed subscription SQL package for tests that need it.
+    pub async fn install_subscriptions(&self) {
+        sqlx::raw_sql(include_str!(
+            "../../extensions/subscriptions/migrations/0001_create_pgstream_subscriptions.sql"
+        ))
+        .execute(&self.pool)
+        .await
+        .expect("Failed to install pgstream subscription SQL package");
+    }
+
     /// Optional helper: create today's partition for `pgstream.events`,
     /// like in your original `setup_database`.
     pub async fn ensure_today_partition(&self) {

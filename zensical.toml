@@ -10,6 +10,10 @@ repo_name = "psteinroe/postgres-stream"
 nav = [
   { "Introduction" = "index.md" },
   { "Getting Started" = "getting-started.md" },
+  { "Guides" = [
+    "guides/subscription-setup.md",
+    "guides/upgrade-subscriptions.md"
+  ]},
   { "Concepts" = [
     "concepts/how-it-works.md",
     "concepts/subscriptions.md",
