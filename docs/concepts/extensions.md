@@ -7,9 +7,9 @@ Add computed values to payload or metadata using SQL expressions.
 Add fields to the event body:
 
 ```sql
-INSERT INTO pgstream.subscriptions (key, stream_id, operation, schema_name, table_name, payload_extensions)
+INSERT INTO pgstream_subscriptions.subscriptions (key, stream_id, operation, schema_name, table_name, column_names, payload_extensions)
 VALUES (
-  'order-created', 1, 'INSERT', 'public', 'orders',
+  'order-created', 1, 'INSERT', 'public', 'orders', array['id', 'total', 'created_at'],
   '[
     {"json_path": "total_formatted", "expression": "''$'' || new.total::text"},
     {"json_path": "order_date", "expression": "new.created_at::date::text"}
@@ -32,9 +32,9 @@ Result:
 Compute routing values from row data:
 
 ```sql
-INSERT INTO pgstream.subscriptions (key, stream_id, operation, schema_name, table_name, metadata_extensions)
+INSERT INTO pgstream_subscriptions.subscriptions (key, stream_id, operation, schema_name, table_name, column_names, metadata_extensions)
 VALUES (
-  'order-created', 1, 'INSERT', 'public', 'orders',
+  'order-created', 1, 'INSERT', 'public', 'orders', array['id', 'region'],
   '[
     {"json_path": "topic", "expression": "''orders-'' || new.region"}
   ]'

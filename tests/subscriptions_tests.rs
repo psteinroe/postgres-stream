@@ -38,9 +38,9 @@ async fn create_subscription(
 ) -> sqlx::types::Uuid {
     let row = sqlx::query(
         r#"
-        insert into pgstream.subscriptions
+        insert into pgstream_subscriptions.subscriptions
             (key, stream_id, operation, schema_name, table_name, when_clause, column_names, payload_extensions, metadata, metadata_extensions)
-        values ($1, $2, $3::pgstream.operation_type, 'public', 'users', $4, array['id', 'name', 'email', 'age'], $5, $6, $7)
+        values ($1, $2, $3::pgstream_subscriptions.operation_type, 'public', 'users', $4, array['id', 'name', 'email', 'age'], $5, $6, $7)
         returning id
         "#,
     )
@@ -133,7 +133,7 @@ async fn get_events_with_metadata(
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_subscription_creates_triggers_and_events() {
-    let db = TestDatabase::spawn().await;
+    let db = TestDatabase::spawn_with_subscriptions().await;
     db.ensure_today_partition().await;
 
     // Create test table
@@ -170,7 +170,7 @@ async fn test_subscription_creates_triggers_and_events() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_subscription_with_when_clause() {
-    let db = TestDatabase::spawn().await;
+    let db = TestDatabase::spawn_with_subscriptions().await;
     db.ensure_today_partition().await;
 
     create_test_table(&db.pool).await;
@@ -221,7 +221,7 @@ async fn test_subscription_with_when_clause() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_update_operation() {
-    let db = TestDatabase::spawn().await;
+    let db = TestDatabase::spawn_with_subscriptions().await;
     db.ensure_today_partition().await;
 
     create_test_table(&db.pool).await;
@@ -266,7 +266,7 @@ async fn test_update_operation() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_delete_operation() {
-    let db = TestDatabase::spawn().await;
+    let db = TestDatabase::spawn_with_subscriptions().await;
     db.ensure_today_partition().await;
 
     create_test_table(&db.pool).await;
@@ -309,7 +309,7 @@ async fn test_delete_operation() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_payload_extensions() {
-    let db = TestDatabase::spawn().await;
+    let db = TestDatabase::spawn_with_subscriptions().await;
     db.ensure_today_partition().await;
 
     create_test_table(&db.pool).await;
@@ -340,11 +340,12 @@ async fn test_payload_extensions() {
     .await;
 
     // Verify build_extensions generates valid SQL
-    let payload_expr: String = sqlx::query_scalar("select pgstream.build_extensions($1)")
-        .bind(&payload_extensions)
-        .fetch_one(&db.pool)
-        .await
-        .expect("Failed to get build_extensions result");
+    let payload_expr: String =
+        sqlx::query_scalar("select pgstream_subscriptions.build_extensions($1)")
+            .bind(&payload_extensions)
+            .fetch_one(&db.pool)
+            .await
+            .expect("Failed to get build_extensions result");
 
     // Assert the SQL expression contains expected JSONB operations
     assert!(
@@ -390,7 +391,7 @@ async fn test_payload_extensions() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_multiple_subscriptions_same_stream() {
-    let db = TestDatabase::spawn().await;
+    let db = TestDatabase::spawn_with_subscriptions().await;
     db.ensure_today_partition().await;
 
     create_test_table(&db.pool).await;
@@ -458,7 +459,7 @@ async fn test_multiple_subscriptions_same_stream() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_subscription_deletion_removes_trigger() {
-    let db = TestDatabase::spawn().await;
+    let db = TestDatabase::spawn_with_subscriptions().await;
     db.ensure_today_partition().await;
 
     create_test_table(&db.pool).await;
@@ -491,7 +492,7 @@ async fn test_subscription_deletion_removes_trigger() {
     // Delete the subscription
     sqlx::query(
         r#"
-        delete from pgstream.subscriptions
+        delete from pgstream_subscriptions.subscriptions
         where id = $1
         "#,
     )
@@ -518,7 +519,7 @@ async fn test_subscription_deletion_removes_trigger() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_events_have_lsn_captured() {
-    let db = TestDatabase::spawn().await;
+    let db = TestDatabase::spawn_with_subscriptions().await;
     db.ensure_today_partition().await;
 
     create_test_table(&db.pool).await;
@@ -575,7 +576,7 @@ async fn test_events_have_lsn_captured() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_lsn_can_be_used_for_queries() {
-    let db = TestDatabase::spawn().await;
+    let db = TestDatabase::spawn_with_subscriptions().await;
     db.ensure_today_partition().await;
 
     create_test_table(&db.pool).await;
@@ -630,7 +631,7 @@ async fn test_lsn_can_be_used_for_queries() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_static_metadata() {
-    let db = TestDatabase::spawn().await;
+    let db = TestDatabase::spawn_with_subscriptions().await;
     db.ensure_today_partition().await;
 
     create_test_table(&db.pool).await;
@@ -681,7 +682,7 @@ async fn test_static_metadata() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_metadata_extensions() {
-    let db = TestDatabase::spawn().await;
+    let db = TestDatabase::spawn_with_subscriptions().await;
     db.ensure_today_partition().await;
 
     create_test_table(&db.pool).await;
@@ -730,7 +731,7 @@ async fn test_metadata_extensions() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_merged_static_and_dynamic_metadata() {
-    let db = TestDatabase::spawn().await;
+    let db = TestDatabase::spawn_with_subscriptions().await;
     db.ensure_today_partition().await;
 
     create_test_table(&db.pool).await;
@@ -793,7 +794,7 @@ async fn test_merged_static_and_dynamic_metadata() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_metadata_extensions_with_nested_paths() {
-    let db = TestDatabase::spawn().await;
+    let db = TestDatabase::spawn_with_subscriptions().await;
     db.ensure_today_partition().await;
 
     create_test_table(&db.pool).await;

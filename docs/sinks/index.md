@@ -29,7 +29,7 @@ Most sinks support dynamic routing via event metadata. This lets you route event
 
 ```sql
 -- Route to different topics based on table name
-insert into pgstream.subscriptions (
+insert into pgstream_subscriptions.subscriptions (
   key, stream_id, operation, schema_name, table_name,
   column_names, metadata_extensions
 ) values (

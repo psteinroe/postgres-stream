@@ -51,11 +51,11 @@ But we only care about the events we subscribed to, and do not want to replicate
 
 ## Subscriptions (Optional)
 
-When you insert a subscription, Postgres Stream creates a trigger on the target table:
+Subscriptions come from a [user-installed SQL package](../guides/subscription-setup.md). When you insert a subscription, that package creates a trigger on the target table; the pgstream daemon does not manage application-table triggers:
 
 ```sql
 -- Auto-generated when you insert into subscriptions table
-create or replace function pgstream._publish_after_insert_on_users()
+create or replace function pgstream_subscriptions._publish_after_insert_on_users()
 returns trigger as $$
 declare
   v_jsonb_output jsonb := '[]'::jsonb;
