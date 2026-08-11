@@ -1,12 +1,10 @@
-use postgres_stream::test_utils::TestDatabase;
-use sqlx::Row;
+use std::borrow::Cow;
 
-const LEGACY_INIT: &str = include_str!("../migrations/1765364029646_init.sql");
-const LEGACY_LSN: &str = include_str!("../migrations/1766831075000_add_lsn.sql");
-const LEGACY_METADATA: &str =
-    include_str!("../migrations/1767795878880_add_metadata_extensions.sql");
-const EXTRACT_SUBSCRIPTIONS: &str =
-    include_str!("../migrations/1786434463000_extract_subscriptions.sql");
+use postgres_stream::{migrations::migrate_pgstream, test_utils::TestDatabase};
+use sqlx::{Row, migrate::Migrator};
+
+const EXTRACT_SUBSCRIPTIONS_VERSION: i64 = 1_786_434_463_000;
+static CORE_MIGRATOR: Migrator = sqlx::migrate!("./migrations");
 const INSTALL_SUBSCRIPTIONS: &str =
     include_str!("../extensions/subscriptions/migrations/0001_create_pgstream_subscriptions.sql");
 const SET_SUBSCRIPTIONS_EXAMPLE: &str =
@@ -14,6 +12,34 @@ const SET_SUBSCRIPTIONS_EXAMPLE: &str =
 const UPGRADE_SUBSCRIPTIONS: &str =
     include_str!("../extensions/subscriptions/upgrades/from-pgstream-0.1.sql");
 const UNINSTALL_SUBSCRIPTIONS: &str = include_str!("../extensions/subscriptions/uninstall.sql");
+
+async fn apply_legacy_core_migrations(database: &TestDatabase) {
+    sqlx::query("create schema if not exists pgstream")
+        .execute(&database.pool)
+        .await
+        .expect("Failed to create pgstream schema");
+
+    let mut connection = database.pool.acquire().await.expect("Failed to connect");
+    sqlx::query("set search_path = 'pgstream'")
+        .execute(&mut *connection)
+        .await
+        .expect("Failed to set migration search path");
+
+    let migrator = Migrator {
+        migrations: Cow::Owned(
+            CORE_MIGRATOR
+                .iter()
+                .filter(|migration| migration.version < EXTRACT_SUBSCRIPTIONS_VERSION)
+                .cloned()
+                .collect(),
+        ),
+        ..Migrator::DEFAULT
+    };
+    migrator
+        .run_direct(&mut *connection)
+        .await
+        .expect("Failed to apply legacy core migrations through SQLx");
+}
 
 async fn create_users_table(database: &TestDatabase) {
     sqlx::query(
@@ -91,6 +117,15 @@ async fn core_migrations_do_not_install_subscriptions() {
 
     assert_eq!(row.get::<Option<String>, _>("legacy"), None);
     assert_eq!(row.get::<Option<String>, _>("extracted"), None);
+
+    let extraction_applied: bool = sqlx::query_scalar(
+        "select exists(select 1 from pgstream._sqlx_migrations where version = $1 and success)",
+    )
+    .bind(EXTRACT_SUBSCRIPTIONS_VERSION)
+    .fetch_one(&database.pool)
+    .await
+    .expect("Failed to inspect migration history");
+    assert!(extraction_applied);
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -153,12 +188,7 @@ async fn optional_set_subscriptions_reconciles_and_skips_unchanged_definitions()
 async fn core_migration_blocks_nonempty_legacy_subscriptions() {
     let database = TestDatabase::spawn_without_migrations().await;
 
-    for migration in [LEGACY_INIT, LEGACY_LSN, LEGACY_METADATA] {
-        sqlx::raw_sql(migration)
-            .execute(&database.pool)
-            .await
-            .expect("Failed to install legacy pgstream schema");
-    }
+    apply_legacy_core_migrations(&database).await;
     create_users_table(&database).await;
 
     sqlx::query(
@@ -174,8 +204,7 @@ async fn core_migration_blocks_nonempty_legacy_subscriptions() {
     .await
     .expect("Failed to create legacy subscription");
 
-    let error = sqlx::raw_sql(EXTRACT_SUBSCRIPTIONS)
-        .execute(&database.pool)
+    let error = migrate_pgstream(&database.config)
         .await
         .expect_err("Core migration should block legacy subscriptions");
     assert!(
@@ -190,6 +219,14 @@ async fn core_migration_blocks_nonempty_legacy_subscriptions() {
             .expect("Failed to verify preserved legacy subscriptions"),
         1
     );
+    let extraction_applied: bool = sqlx::query_scalar(
+        "select exists(select 1 from pgstream._sqlx_migrations where version = $1)",
+    )
+    .bind(EXTRACT_SUBSCRIPTIONS_VERSION)
+    .fetch_one(&database.pool)
+    .await
+    .expect("Failed to inspect failed migration history");
+    assert!(!extraction_applied);
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -322,12 +359,7 @@ async fn uninstall_removes_package_and_managed_triggers() {
 async fn upgrade_moves_subscriptions_without_recreating_rows_or_triggers() {
     let database = TestDatabase::spawn_without_migrations().await;
 
-    for migration in [LEGACY_INIT, LEGACY_LSN, LEGACY_METADATA] {
-        sqlx::raw_sql(migration)
-            .execute(&database.pool)
-            .await
-            .expect("Failed to install legacy pgstream schema");
-    }
+    apply_legacy_core_migrations(&database).await;
 
     database.ensure_today_partition().await;
     create_users_table(&database).await;
@@ -399,11 +431,19 @@ async fn upgrade_moves_subscriptions_without_recreating_rows_or_triggers() {
         "pgstream_subscriptions"
     );
 
-    // The core extraction migration must accept an already-upgraded installation.
-    sqlx::raw_sql(EXTRACT_SUBSCRIPTIONS)
-        .execute(&database.pool)
+    // The actual SQLx runner must accept an already-upgraded installation and
+    // record the core extraction migration.
+    migrate_pgstream(&database.config)
         .await
         .expect("Core extraction migration removed the user-managed package");
+    let extraction_applied: bool = sqlx::query_scalar(
+        "select exists(select 1 from pgstream._sqlx_migrations where version = $1 and success)",
+    )
+    .bind(EXTRACT_SUBSCRIPTIONS_VERSION)
+    .fetch_one(&database.pool)
+    .await
+    .expect("Failed to inspect migration history");
+    assert!(extraction_applied);
 
     sqlx::query("insert into public.users (email) values ('upgrade@example.com')")
         .execute(&database.pool)
@@ -415,4 +455,24 @@ async fn upgrade_moves_subscriptions_without_recreating_rows_or_triggers() {
         .await
         .expect("Moved trigger did not emit an event");
     assert_eq!(event_name, "user-created");
+
+    sqlx::query(
+        "update pgstream_subscriptions.subscriptions set column_names = array['id'] where id = $1",
+    )
+    .bind(subscription_id)
+    .execute(&database.pool)
+    .await
+    .expect("Failed to rebuild a moved subscription trigger");
+    let rebuilt_trigger_oid = insert_trigger_oid(&database).await;
+    assert_ne!(rebuilt_trigger_oid, trigger_oid);
+
+    sqlx::query("insert into public.users (email) values ('rebuilt@example.com')")
+        .execute(&database.pool)
+        .await
+        .expect("Rebuilt trigger failed");
+    let event_count: i64 = sqlx::query_scalar("select count(*) from pgstream.events")
+        .fetch_one(&database.pool)
+        .await
+        .expect("Failed to count upgraded subscription events");
+    assert_eq!(event_count, 2);
 }
