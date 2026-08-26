@@ -5,6 +5,83 @@ use postgres_stream::sink::memory::MemorySink;
 use postgres_stream::stream::PgStream;
 use postgres_stream::test_utils::{TestDatabase, create_postgres_store, test_stream_config};
 
+async fn assert_events_lsn_brin_indexes(db: &TestDatabase) {
+    let (parent_index_valid,): (bool,) = sqlx::query_as(
+        "select exists(
+            select 1
+            from pg_class as index_relation
+            join pg_namespace as index_namespace
+              on index_namespace.oid = index_relation.relnamespace
+            join pg_am as access_method
+              on access_method.oid = index_relation.relam
+            join pg_index as index_metadata
+              on index_metadata.indexrelid = index_relation.oid
+            where index_namespace.nspname = 'pgstream'
+              and index_relation.relname = 'events_lsn_brin_idx'
+              and index_relation.relkind = 'I'
+              and access_method.amname = 'brin'
+              and index_metadata.indisready
+              and index_metadata.indisvalid
+        )",
+    )
+    .fetch_one(&db.pool)
+    .await
+    .unwrap();
+    assert!(parent_index_valid, "parent BRIN index should be valid");
+
+    let (partition_count, attached_index_count): (i64, i64) = sqlx::query_as(
+        "with leaf_partitions as (
+            select partition_tree.relid, partition_relation.relname
+            from pg_partition_tree('pgstream.events'::regclass) as partition_tree
+            join pg_class as partition_relation
+              on partition_relation.oid = partition_tree.relid
+            where partition_tree.isleaf
+        ), parent_index as (
+            select index_relation.oid
+            from pg_class as index_relation
+            join pg_namespace as index_namespace
+              on index_namespace.oid = index_relation.relnamespace
+            where index_namespace.nspname = 'pgstream'
+              and index_relation.relname = 'events_lsn_brin_idx'
+        )
+        select
+            (select count(*) from leaf_partitions),
+            (select count(*)
+             from leaf_partitions
+             where exists(
+                 select 1
+                 from pg_index as child_index
+                 join pg_class as child_index_relation
+                   on child_index_relation.oid = child_index.indexrelid
+                 join pg_am as access_method
+                   on access_method.oid = child_index_relation.relam
+                 join pg_inherits as index_attachment
+                   on index_attachment.inhrelid = child_index.indexrelid
+                 where child_index.indrelid = leaf_partitions.relid
+                   and child_index.indnatts = 1
+                   and child_index.indkey[0] = (
+                       select attnum
+                       from pg_attribute
+                       where attrelid = leaf_partitions.relid
+                         and attname = 'lsn'
+                         and not attisdropped
+                   )
+                   and access_method.amname = 'brin'
+                   and child_index.indisready
+                   and child_index.indisvalid
+                   and index_attachment.inhparent = (select oid from parent_index)
+             ))",
+    )
+    .fetch_one(&db.pool)
+    .await
+    .unwrap();
+
+    assert_eq!(
+        attached_index_count, partition_count,
+        "every events leaf partition should have a valid attached BRIN index"
+    );
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn test_initial_partitions_created() {
     let db = TestDatabase::spawn().await;
@@ -27,6 +104,7 @@ async fn test_initial_partitions_created() {
     .unwrap();
 
     assert_eq!(count.0, 7, "Should create 7 initial partitions");
+    assert_events_lsn_brin_indexes(&db).await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -86,6 +164,7 @@ async fn test_maintenance_creates_future_partitions() {
     .await
     .unwrap();
     assert_eq!(count_after.0, 7);
+    assert_events_lsn_brin_indexes(&db).await;
 }
 
 #[tokio::test(flavor = "multi_thread")]

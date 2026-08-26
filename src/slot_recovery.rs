@@ -120,7 +120,9 @@ pub async fn handle_slot_recovery(pool: &PgPool, stream_id: u64) -> EtlResult<()
         "found confirmed_flush_lsn from invalidated slot"
     );
 
-    // 2. Find the first event after the confirmed LSN
+    // 2. Find the first event after the confirmed LSN.
+    // `id` intentionally resolves to the selected text output column so its
+    // ordering matches the persisted checkpoint representation.
     let lsn_checkpoint: Option<Checkpoint> = sqlx::query_as(
         "SELECT id::text, created_at FROM pgstream.events
          WHERE lsn > $1::pg_lsn AND stream_id = $2
