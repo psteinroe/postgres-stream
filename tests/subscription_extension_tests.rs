@@ -361,7 +361,6 @@ async fn upgrade_moves_subscriptions_without_recreating_rows_or_triggers() {
 
     apply_legacy_core_migrations(&database).await;
 
-    database.ensure_today_partition().await;
     create_users_table(&database).await;
 
     let subscription_id: sqlx::types::Uuid = sqlx::query_scalar(
@@ -444,6 +443,8 @@ async fn upgrade_moves_subscriptions_without_recreating_rows_or_triggers() {
     .await
     .expect("Failed to inspect migration history");
     assert!(extraction_applied);
+
+    database.ensure_today_partition().await;
 
     sqlx::query("insert into public.users (email) values ('upgrade@example.com')")
         .execute(&database.pool)
