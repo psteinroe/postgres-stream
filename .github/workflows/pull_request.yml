@@ -24,10 +24,14 @@ jobs:
         uses: moonrepo/setup-rust@v1
         with:
           components: rustfmt
-          bins: taplo-cli
           cache-base: main
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install taplo
+        uses: taiki-e/install-action@v2
+        with:
+          tool: taplo
 
       - name: Run cargo fmt
         run: cargo fmt --all --check
