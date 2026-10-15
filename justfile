@@ -7,13 +7,11 @@ alias rg := reset-git
 
 # Installs the tools needed to develop
 install-tools:
-	cargo install cargo-binstall
-	cargo binstall taplo-cli
+	cargo install taplo-cli --locked
 
 # Upgrades the tools needed to develop
 upgrade-tools:
-	cargo install cargo-binstall --force
-	cargo binstall taplo-cli
+	cargo install taplo-cli --locked --force
 
 format:
     cargo fmt
