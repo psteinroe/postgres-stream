@@ -221,3 +221,11 @@ Override with the `CONFIG_PATH` environment variable:
 ```bash
 CONFIG_PATH=/etc/postgres-stream/config.yaml postgres-stream
 ```
+
+## Metrics
+
+Prometheus metrics are served at `/metrics` on `[::]:9000`. Set `PGSTREAM_METRICS_ADDR` to listen elsewhere, for example to run several instances on one host network:
+
+```bash
+PGSTREAM_METRICS_ADDR=127.0.0.1:9187 postgres-stream
+```
