@@ -870,3 +870,25 @@ async fn test_slot_recovery_preserves_existing_failover_checkpoint() {
         "Recovery must preserve the existing failover checkpoint timestamp"
     );
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_events_inserted_without_lsn_get_the_current_wal_lsn() {
+    let db = TestDatabase::spawn().await;
+    db.ensure_today_partition().await;
+
+    let (lsn, after): (Option<String>, bool) = sqlx::query_as(
+        "with inserted as (
+            insert into pgstream.events (payload, stream_id) values ('{}'::jsonb, 1) returning lsn
+         )
+         select lsn::text, coalesce(lsn <= pg_current_wal_lsn(), false) from inserted",
+    )
+    .fetch_one(&db.pool)
+    .await
+    .unwrap();
+
+    assert!(
+        lsn.is_some(),
+        "an event inserted without an lsn must get one, or slot recovery cannot find it"
+    );
+    assert!(after, "the default lsn must not be ahead of the WAL");
+}
