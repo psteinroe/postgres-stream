@@ -92,7 +92,7 @@ jobs:
 
     steps:
       - name: Free Disk Space
-        uses: jlumbroso/free-disk-space@main
+        uses: lumbroso-commons/free-disk-space@main
         with:
           android: true
           dotnet: true
