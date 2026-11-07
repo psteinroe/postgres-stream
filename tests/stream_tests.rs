@@ -1,7 +1,7 @@
 use chrono::Duration;
 use etl::destination::Destination;
 use etl::store::both::postgres::PostgresStore;
-use etl::types::{Cell, Event, PgLsn};
+use etl::types::{BeginEvent, Cell, CommitEvent, Event, PgLsn, TableId};
 use postgres_stream::sink::memory::MemorySink;
 use postgres_stream::stream::PgStream;
 use postgres_stream::test_utils::{
@@ -70,6 +70,68 @@ async fn test_pgstream_write_events_via_destination_trait() {
         stored_events
             .iter()
             .all(|event| event.lsn == Some(row_lsn) && event.commit_lsn == Some(commit_lsn))
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_write_events_without_a_stored_events_table_schema() {
+    let db = TestDatabase::spawn().await;
+    let config = test_stream_config(&db);
+    let sink = MemorySink::new();
+    // As on a first start, before etl's table sync stored the schema (or after it failed)
+    let store = PostgresStore::new(config.id, db.config.clone());
+    let table_id: (i64,) = sqlx::query_as("select 'pgstream.events'::regclass::oid::bigint")
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+    let table_id = TableId::new(table_id.0 as u32);
+
+    let stream: PgStream<MemorySink, PostgresStore> = PgStream::create(config, sink.clone(), store)
+        .await
+        .expect("Failed to create PgStream");
+
+    let lsn: PgLsn = "0/100".parse().unwrap();
+    let markers = vec![
+        Event::Begin(BeginEvent {
+            start_lsn: lsn,
+            commit_lsn: lsn,
+            timestamp: 0,
+            xid: 1,
+        }),
+        Event::Commit(CommitEvent {
+            start_lsn: lsn,
+            commit_lsn: lsn,
+            flags: 0,
+            end_lsn: lsn,
+            timestamp: 0,
+        }),
+    ];
+    stream
+        .write_events(markers)
+        .await
+        .expect("A batch of transaction markers needs no schema");
+    assert!(sink.events().await.is_empty());
+
+    let mut event = make_test_event(table_id, serde_json::json!({"id": 1}));
+    let Event::Insert(insert_event) = &mut event else {
+        panic!("test event should be an insert");
+    };
+    insert_event
+        .table_row
+        .values
+        .push(Cell::String("0/100".to_string()));
+    stream
+        .write_events(vec![event])
+        .await
+        .expect("The events table schema is read from the catalog");
+
+    let stored_events = sink.events().await;
+    assert_eq!(
+        stored_events
+            .iter()
+            .map(|event| &event.payload)
+            .collect::<Vec<_>>(),
+        [&serde_json::json!({"id": 1})]
     );
 }
 

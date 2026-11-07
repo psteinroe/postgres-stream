@@ -329,6 +329,11 @@ where
     }
 
     async fn write_events(&self, events: Vec<Event>) -> EtlResult<()> {
+        // Batches of only transaction markers need no schema
+        if !events.iter().any(|event| matches!(event, Event::Insert(_))) {
+            return Ok(());
+        }
+
         let schema = self.store.get_events_table_schema().await?;
         let stream_events = convert_stream_events_from_events(events, &schema.column_schemas)?;
 

@@ -15,8 +15,9 @@ use crate::{
     config::StreamConfig,
     maintenance::PartitionInfo,
     queries::{
-        create_partition, drop_partition, fetch_event, fetch_events_table_id, fetch_stream_state,
-        insert_stream_state, list_partitions, upsert_stream_maintenance, upsert_stream_status,
+        create_partition, drop_partition, fetch_event, fetch_events_table_id,
+        fetch_events_table_schema, fetch_stream_state, insert_stream_state, list_partitions,
+        upsert_stream_maintenance, upsert_stream_status,
     },
     types::{EventIdentifier, StreamStatus, TriggeredEvent},
 };
@@ -37,6 +38,8 @@ pub struct StreamStore<S> {
     state: Arc<RwLock<StreamState>>,
     checkpoint_cache: Arc<RwLock<Option<Arc<TriggeredEvent>>>>,
     events_table_id: Arc<TableId>,
+    /// The events table's schema read from the catalog, when etl's schema store does not have it yet.
+    events_table_schema: Arc<RwLock<Option<Arc<TableSchema>>>>,
 }
 
 impl<S> Clone for StreamStore<S> {
@@ -47,6 +50,7 @@ impl<S> Clone for StreamStore<S> {
             state: Arc::clone(&self.state),
             checkpoint_cache: Arc::clone(&self.checkpoint_cache),
             events_table_id: Arc::clone(&self.events_table_id),
+            events_table_schema: Arc::clone(&self.events_table_schema),
         }
     }
 }
@@ -105,6 +109,7 @@ impl<S: SchemaStore> StreamStore<S> {
             state: Arc::new(RwLock::new(state)),
             checkpoint_cache: Arc::new(RwLock::new(checkpoint_cache)),
             events_table_id: Arc::new(events_table_id),
+            events_table_schema: Arc::new(RwLock::new(None)),
         })
     }
 
@@ -243,16 +248,36 @@ impl<S: SchemaStore> StreamStore<S> {
         Ok(())
     }
 
+    /// The events table's schema: etl's, once its table sync stored it, else read from the catalog.
+    ///
+    /// Requiring etl's made the stream crash-loop with `MissingTableSchema` whenever the apply
+    /// worker delivered events before the table sync stored the schema, and forever when the
+    /// table sync failed.
     pub async fn get_events_table_schema(&self) -> EtlResult<Arc<TableSchema>> {
-        self.schema_store
+        if let Some(schema) = self
+            .schema_store
             .get_table_schema(&self.events_table_id)
             .await?
-            .ok_or_else(|| {
-                etl_error!(
-                    ErrorKind::MissingTableSchema,
-                    "Events table schema not found",
-                    format!("Schema for table_id={} not in cache", self.events_table_id)
-                )
-            })
+        {
+            return Ok(schema);
+        }
+
+        if let Some(schema) = self.events_table_schema.read().await.as_ref() {
+            return Ok(Arc::clone(schema));
+        }
+
+        let pool = Self::connect_temporary(&self.stream_config.pg_connection).await?;
+        let schema = fetch_events_table_schema(&pool, *self.events_table_id).await?;
+        if schema.column_schemas.is_empty() {
+            return Err(etl_error!(
+                ErrorKind::MissingTableSchema,
+                "Events table schema not found",
+                format!("No columns for table_id={}", self.events_table_id)
+            ));
+        }
+
+        let schema = Arc::new(schema);
+        *self.events_table_schema.write().await = Some(Arc::clone(&schema));
+        Ok(schema)
     }
 }
