@@ -3,7 +3,7 @@ use etl::destination::Destination;
 use etl::store::both::postgres::PostgresStore;
 use etl::types::{Cell, Event, PgLsn};
 use postgres_stream::sink::memory::MemorySink;
-use postgres_stream::stream::PgStream;
+use postgres_stream::stream::{FAILOVER_RECOVERY_INTERVAL, PgStream};
 use postgres_stream::test_utils::{
     FailableSink, TestDatabase, create_postgres_store, create_postgres_store_with_table_id,
     insert_events_to_db, make_event_with_id, make_test_event, test_stream_config,
@@ -188,6 +188,66 @@ async fn test_failover_recovery_replays_missed_events() {
         matches!(status, StreamStatus::Healthy),
         "Stream should return to Healthy after recovery"
     );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_failover_recovers_without_a_new_batch() {
+    let db = TestDatabase::spawn().await;
+    let config = test_stream_config(&db);
+    let sink = FailableSink::new();
+    let (store, table_id) =
+        create_postgres_store_with_table_id(config.id, &db.config, &db.pool).await;
+
+    let stream: PgStream<FailableSink, PostgresStore> =
+        PgStream::create(config.clone(), sink.clone(), store)
+            .await
+            .expect("Failed to create PgStream");
+
+    let all_event_ids = insert_events_to_db(&db, 3).await;
+
+    // The destination fails on the last batch the stream receives
+    sink.fail_on_call(0);
+    stream
+        .write_events(vec![make_event_with_id(
+            table_id,
+            all_event_ids.first().expect("Should have event 0"),
+            serde_json::json!({"seq": 1}),
+        )])
+        .await
+        .unwrap();
+    let (status, _) = stream.store().get_stream_state().await.unwrap();
+    assert!(matches!(status, StreamStatus::Failover { .. }));
+
+    // The destination is back, and no new event arrives
+    sink.succeed_always();
+    let deadline = tokio::time::Instant::now() + FAILOVER_RECOVERY_INTERVAL * 4;
+    loop {
+        let (status, _) = stream.store().get_stream_state().await.unwrap();
+        if matches!(status, StreamStatus::Healthy) {
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "Stream should leave failover without a new batch"
+        );
+        tokio::time::sleep(StdDuration::from_millis(200)).await;
+    }
+
+    let published_ids: HashSet<String> = sink
+        .events()
+        .await
+        .into_iter()
+        .map(|event| event.id.id)
+        .collect();
+    for event_id in &all_event_ids {
+        assert!(
+            published_ids.contains(&event_id.id),
+            "Event {} should be delivered by the recovery",
+            event_id.id
+        );
+    }
+
+    stream.shutdown().await.unwrap();
 }
 
 // Extended failover scenarios

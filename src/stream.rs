@@ -7,7 +7,8 @@ use etl::{
     types::{Event, TableId, TableRow},
 };
 use futures::StreamExt;
-use tokio::pin;
+use std::{sync::Arc, time::Duration};
+use tokio::{pin, sync::Mutex, task::JoinHandle};
 use tracing::{info, warn};
 
 use crate::{
@@ -26,7 +27,7 @@ use crate::{
     utils::task::TaskHandle,
 };
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct PgStream<Sink, SchemaStore> {
     store: StreamStore<SchemaStore>,
     sink: Sink,
@@ -36,11 +37,37 @@ pub struct PgStream<Sink, SchemaStore> {
     ///
     /// Stores the time for which the executed maintenance was scheduled.
     maintenance_handle: TaskHandle<DateTime<Utc>>,
+
+    /// Held while a batch is processed or failover recovery runs, so they never overlap.
+    failover_lock: Arc<Mutex<()>>,
+
+    /// Retries failover recovery while no batch arrives (see [`FAILOVER_RECOVERY_INTERVAL`]).
+    recovery_task: Arc<std::sync::Mutex<Option<JoinHandle<()>>>>,
 }
+
+// Not derived: the schema store is shared through `StreamStore`, it need not be `Clone` itself
+impl<Sink: Clone, SchemaStore> Clone for PgStream<Sink, SchemaStore> {
+    fn clone(&self) -> Self {
+        Self {
+            store: self.store.clone(),
+            sink: self.sink.clone(),
+            config: self.config.clone(),
+            maintenance_handle: self.maintenance_handle.clone(),
+            failover_lock: Arc::clone(&self.failover_lock),
+            recovery_task: Arc::clone(&self.recovery_task),
+        }
+    }
+}
+
+/// How often a stream in failover retries recovery when no new batch arrives.
+///
+/// Recovery used to run only at the start of a batch: an idle stream stayed in failover, and the
+/// event that failed was not delivered until the next event was written.
+pub const FAILOVER_RECOVERY_INTERVAL: Duration = Duration::from_secs(5);
 
 impl<Sink, SchemaStore> PgStream<Sink, SchemaStore>
 where
-    Sink: SinkTrait + Sync,
+    Sink: SinkTrait + Clone + Send + Sync + 'static,
     SchemaStore: SchemaStoreTrait + Sync + Send + 'static,
 {
     pub async fn create(config: StreamConfig, sink: Sink, store: SchemaStore) -> EtlResult<Self> {
@@ -75,12 +102,56 @@ where
             store.store_next_maintenance_at(next).await?;
         }
 
-        Ok(Self {
+        let stream = Self {
             store,
             sink,
             config,
             maintenance_handle: TaskHandle::default(),
-        })
+            failover_lock: Arc::new(Mutex::new(())),
+            recovery_task: Arc::new(std::sync::Mutex::new(None)),
+        };
+        stream.start_failover_recovery();
+
+        Ok(stream)
+    }
+
+    fn start_failover_recovery(&self) {
+        let stream = self.clone();
+        let task = tokio::spawn(async move {
+            let mut interval = tokio::time::interval(FAILOVER_RECOVERY_INTERVAL);
+            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            loop {
+                interval.tick().await;
+                if let Err(err) = stream.recover_idle_failover().await {
+                    warn!(error = %err, "Failover recovery without a new batch failed; will retry");
+                }
+            }
+        });
+        if let Ok(mut recovery_task) = self.recovery_task.lock() {
+            *recovery_task = Some(task);
+        }
+    }
+
+    /// Recovers from failover when no batch does: replays every event after the checkpoint.
+    async fn recover_idle_failover(&self) -> EtlResult<()> {
+        // A batch being processed attempts recovery itself
+        let Ok(_guard) = self.failover_lock.try_lock() else {
+            return Ok(());
+        };
+
+        let (status, _) = self.store.get_stream_state().await?;
+        if let StreamStatus::Failover {
+            checkpoint_event_id,
+        } = status
+        {
+            info!(
+                checkpoint_event_id = %checkpoint_event_id.id,
+                "Stream is in failover without new events; attempting recovery"
+            );
+            self.handle_failover(&checkpoint_event_id, None).await?;
+        }
+
+        Ok(())
     }
 
     /// Main processing tick for a batch of events.
@@ -94,6 +165,7 @@ where
     ///
     /// * `events`: Batch of stream events to process.
     async fn tick(&self, events: Vec<TriggeredEvent>) -> EtlResult<()> {
+        let _guard = self.failover_lock.lock().await;
         let (status, next_maintenance_at) = self.store.get_stream_state().await?;
 
         // Handle maintenance in background (non-blocking)
@@ -111,7 +183,7 @@ where
                 "Stream is in failover mode; attempting recovery before publishing current batch"
             );
             let recovered = self
-                .handle_failover(&checkpoint_event_id, &current_batch_event_id)
+                .handle_failover(&checkpoint_event_id, Some(&current_batch_event_id))
                 .await?;
             if !recovered {
                 return Ok(());
@@ -218,10 +290,11 @@ where
         Ok(())
     }
 
+    /// Replays the events after the checkpoint, up to (excluding) `until`, or all of them without one.
     async fn handle_failover(
         &self,
         checkpoint_event_id: &EventIdentifier,
-        current_batch_event_id: &EventIdentifier,
+        until: Option<&EventIdentifier>,
     ) -> EtlResult<bool> {
         let checkpoint_event = self.store.get_checkpoint_event(checkpoint_event_id).await?;
 
@@ -251,9 +324,18 @@ where
             ReplayClient::connect(self.config.id, self.config.pg_connection.clone()).await?;
         let table_schema = self.store.get_events_table_schema().await?;
 
-        let replay_stream = replay_client
-            .get_events_copy_stream(&checkpoint_event.id, current_batch_event_id)
-            .await?;
+        let replay_stream = match until {
+            Some(until) => {
+                replay_client
+                    .get_events_copy_stream(&checkpoint_event.id, until)
+                    .await?
+            }
+            None => {
+                replay_client
+                    .get_events_copy_stream_after(&checkpoint_event.id)
+                    .await?
+            }
+        };
         let replay_stream = TableCopyStream::wrap(replay_stream, &table_schema.column_schemas, 1);
         let replay_stream = TimeoutBatchStream::wrap(replay_stream, self.config.batch.clone());
         pin!(replay_stream);
@@ -306,7 +388,7 @@ impl<Sink, SchemaStore> PgStream<Sink, SchemaStore> {
 
 impl<Sink, SchemaStore> Destination for PgStream<Sink, SchemaStore>
 where
-    Sink: SinkTrait + Sync,
+    Sink: SinkTrait + Clone + Send + Sync + 'static,
     SchemaStore: SchemaStoreTrait + Sync + Send + 'static,
 {
     fn name() -> &'static str {
@@ -342,6 +424,15 @@ where
     }
 
     async fn shutdown(&self) -> EtlResult<()> {
+        if let Some(task) = self
+            .recovery_task
+            .lock()
+            .ok()
+            .and_then(|mut recovery_task| recovery_task.take())
+        {
+            task.abort();
+        }
+
         if let Some(prev_scheduled_at) = self.maintenance_handle.wait().await {
             info!("Maintenance task completed");
             self.schedule_next_maintenance(prev_scheduled_at).await?;

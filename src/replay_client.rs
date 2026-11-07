@@ -182,6 +182,31 @@ impl ReplayClient {
         Ok(stream)
     }
 
+    /// Creates a COPY stream of every event after `from` (exclusive), without an upper bound.
+    ///
+    /// Used to recover from failover when no new batch provides one.
+    pub async fn get_events_copy_stream_after(
+        &self,
+        from: &EventIdentifier,
+    ) -> EtlResult<CopyOutStream> {
+        let copy_query = format!(
+            r#"
+                copy (
+                  select id, payload, metadata, stream_id, created_at, lsn
+                  from pgstream.events
+                  where (created_at, id) > ('{}'::timestamptz, '{}'::uuid)
+                    and stream_id = {}
+                  order by created_at, id
+                ) to stdout with (format text);
+            "#,
+            from.created_at, from.id, self.stream_id as i64
+        );
+
+        let stream = self.copy_client.copy_out_simple(&copy_query).await?;
+
+        Ok(stream)
+    }
+
     /// Updates the failover checkpoint for the given stream.
     ///
     /// This is duplicated from the [`StreamStore`] because we want to use a persistent connection during failover.
