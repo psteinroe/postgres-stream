@@ -2,7 +2,7 @@ use chrono::{DateTime, NaiveDate, Utc};
 use etl::{
     error::{ErrorKind, EtlResult},
     etl_error,
-    store::schema::SchemaStore,
+    store::SchemaStore,
 };
 use tracing::info;
 

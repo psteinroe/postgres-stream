@@ -1,4 +1,4 @@
-use etl::{error::EtlResult, types::TableId};
+use etl::{error::EtlResult, schema::TableId};
 use sqlx::PgPool;
 use sqlx::postgres::types::Oid as SqlxTableId;
 

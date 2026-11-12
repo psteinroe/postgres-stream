@@ -9,15 +9,17 @@
 
 use std::time::Duration;
 
-use etl::store::both::postgres::PostgresStore;
+use etl::store::PostgresStore;
 use postgres_stream::migrations::migrate_etl;
 use postgres_stream::queries::get_slot_state;
 use postgres_stream::sink::memory::MemorySink;
 use postgres_stream::slot_recovery::handle_slot_recovery;
 use postgres_stream::stream::PgStream;
 use postgres_stream::test_utils::{
-    TestDatabase, acquire_exclusive_test_lock, test_stream_config_with_id, unique_pipeline_id,
+    TestDatabase, acquire_exclusive_test_lock, slot_failover, supports_failover_slots,
+    test_stream_config_with_id, unique_pipeline_id,
 };
+use sqlx::AssertSqlSafe;
 
 /// Test startup with an inactive, invalidated slot still triggers recovery flow.
 #[tokio::test(flavor = "multi_thread")]
@@ -39,7 +41,9 @@ async fn test_start_with_inactive_invalidated_slot_triggers_recovery() {
 
     // Step 2: Create and start a pipeline to establish the replication slot
     {
-        let state_store = PostgresStore::new(pipeline_id, db.config.clone());
+        let state_store = PostgresStore::new(pipeline_id, db.config.clone())
+            .await
+            .expect("Failed to create PostgresStore");
         let sink = MemorySink::new();
         let pgstream = PgStream::create(stream_config.clone(), sink, state_store.clone())
             .await
@@ -55,9 +59,9 @@ async fn test_start_with_inactive_invalidated_slot_triggers_recovery() {
         tokio::time::sleep(Duration::from_millis(500)).await;
 
         // Verify slot was created
-        let slot_exists: bool = sqlx::query_scalar(&format!(
+        let slot_exists: bool = sqlx::query_scalar(AssertSqlSafe(format!(
             "select exists(select 1 from pg_replication_slots where slot_name = '{slot_name}')"
-        ))
+        )))
         .fetch_one(&db.pool)
         .await
         .unwrap();
@@ -65,17 +69,14 @@ async fn test_start_with_inactive_invalidated_slot_triggers_recovery() {
         assert!(slot_exists, "Replication slot should be created");
 
         // Gracefully shutdown the pipeline
-        let shutdown_tx = pipeline.shutdown_tx();
-        shutdown_tx
-            .shutdown()
-            .expect("Failed to send shutdown signal");
+        pipeline.shutdown();
         pipeline.wait().await.expect("Failed to wait for pipeline");
     }
 
     // Step 3: Verify slot still exists after shutdown
-    let slot_exists: bool = sqlx::query_scalar(&format!(
+    let slot_exists: bool = sqlx::query_scalar(AssertSqlSafe(format!(
         "select exists(select 1 from pg_replication_slots where slot_name = '{slot_name}')"
-    ))
+    )))
     .fetch_one(&db.pool)
     .await
     .unwrap();
@@ -83,9 +84,9 @@ async fn test_start_with_inactive_invalidated_slot_triggers_recovery() {
     assert!(slot_exists, "Slot should persist after graceful shutdown");
 
     // Verify slot is inactive before invalidation and restart.
-    let slot_active: bool = sqlx::query_scalar(&format!(
+    let slot_active: bool = sqlx::query_scalar(AssertSqlSafe(format!(
         "select active from pg_replication_slots where slot_name = '{slot_name}'"
-    ))
+    )))
     .fetch_one(&db.pool)
     .await
     .unwrap();
@@ -138,9 +139,9 @@ async fn test_start_with_inactive_invalidated_slot_triggers_recovery() {
     sqlx::query("checkpoint").execute(&db.pool).await.unwrap();
 
     // Verify slot is now invalidated and still inactive
-    let slot_state: (String, bool) = sqlx::query_as(&format!(
+    let slot_state: (String, bool) = sqlx::query_as(AssertSqlSafe(format!(
         "select wal_status, active from pg_replication_slots where slot_name = '{slot_name}'"
-    ))
+    )))
     .fetch_one(&db.pool)
     .await
     .unwrap();
@@ -155,9 +156,9 @@ async fn test_start_with_inactive_invalidated_slot_triggers_recovery() {
     );
 
     // Verify confirmed_flush_lsn is preserved for recovery
-    let confirmed_lsn: Option<String> = sqlx::query_scalar(&format!(
+    let confirmed_lsn: Option<String> = sqlx::query_scalar(AssertSqlSafe(format!(
         "select confirmed_flush_lsn::text from pg_replication_slots where slot_name = '{slot_name}'"
-    ))
+    )))
     .fetch_one(&db.pool)
     .await
     .unwrap();
@@ -168,7 +169,9 @@ async fn test_start_with_inactive_invalidated_slot_triggers_recovery() {
     );
 
     // Step 5: Try to restart the pipeline with the invalidated slot
-    let state_store = PostgresStore::new(pipeline_id, db.config.clone());
+    let state_store = PostgresStore::new(pipeline_id, db.config.clone())
+        .await
+        .expect("Failed to create PostgresStore");
     let sink = MemorySink::new();
     let pgstream = PgStream::create(stream_config.clone(), sink, state_store.clone())
         .await
@@ -196,9 +199,6 @@ async fn test_start_with_inactive_invalidated_slot_triggers_recovery() {
             // If start succeeded, wait a bit and check if it fails during operation
             tokio::time::sleep(Duration::from_secs(1)).await;
 
-            // Get shutdown handle before consuming pipeline
-            let shutdown_tx = pipeline.shutdown_tx();
-
             // The pipeline might have started but should fail when trying to use the slot
             let wait_result = tokio::time::timeout(Duration::from_secs(5), pipeline.wait()).await;
 
@@ -211,7 +211,7 @@ async fn test_start_with_inactive_invalidated_slot_triggers_recovery() {
                 Ok(Err(e)) => e,
                 Err(_) => {
                     // Timeout - pipeline is still running, need to shut it down
-                    let _ = shutdown_tx.shutdown();
+                    pipeline.shutdown();
                     panic!(
                         "Pipeline did not fail within timeout - expected failure due to invalidated slot"
                     );
@@ -235,9 +235,9 @@ async fn test_start_with_inactive_invalidated_slot_triggers_recovery() {
         .await
         .expect("Slot recovery should succeed for inactive invalidated slot");
 
-    let old_slot_dropped: bool = sqlx::query_scalar(&format!(
+    let old_slot_dropped: bool = sqlx::query_scalar(AssertSqlSafe(format!(
         "SELECT NOT EXISTS(SELECT 1 FROM pg_replication_slots WHERE slot_name = '{slot_name}')"
-    ))
+    )))
     .fetch_one(&db.pool)
     .await
     .unwrap();
@@ -255,7 +255,10 @@ async fn test_pipeline_recovers_from_invalidated_slot() {
     let _lock = acquire_exclusive_test_lock().await;
 
     let db = TestDatabase::spawn().await;
-    let stream_config = test_stream_config_with_id(&db, unique_pipeline_id());
+    let mut stream_config = test_stream_config_with_id(&db, unique_pipeline_id());
+    // On Postgres 17+ the recovered slot must be recreated as a failover slot.
+    let failover = supports_failover_slots(&db.pool).await;
+    stream_config.failover = failover;
     let pipeline_id = stream_config.id;
     let slot_name = format!("supabase_etl_apply_{pipeline_id}");
 
@@ -272,7 +275,9 @@ async fn test_pipeline_recovers_from_invalidated_slot() {
 
     // Step 1: Start pipeline, wait for replication to be ready, then insert test events
     {
-        let state_store = PostgresStore::new(pipeline_id, db.config.clone());
+        let state_store = PostgresStore::new(pipeline_id, db.config.clone())
+            .await
+            .expect("Failed to create PostgresStore");
         let pgstream = PgStream::create(stream_config.clone(), sink.clone(), state_store.clone())
             .await
             .expect("Failed to create PgStream");
@@ -285,9 +290,9 @@ async fn test_pipeline_recovers_from_invalidated_slot() {
         // Wait for slot to be created and tables to reach sync_done state
         let mut tables_synced = false;
         for _ in 0..60 {
-            let slot_exists: bool = sqlx::query_scalar(&format!(
+            let slot_exists: bool = sqlx::query_scalar(AssertSqlSafe(format!(
                 "SELECT EXISTS(SELECT 1 FROM pg_replication_slots WHERE slot_name = '{slot_name}')"
-            ))
+            )))
             .fetch_one(&db.pool)
             .await
             .unwrap();
@@ -360,10 +365,7 @@ async fn test_pipeline_recovers_from_invalidated_slot() {
         tokio::time::sleep(Duration::from_secs(2)).await;
 
         // Graceful shutdown
-        let shutdown_tx = pipeline.shutdown_tx();
-        shutdown_tx
-            .shutdown()
-            .expect("Failed to send shutdown signal");
+        pipeline.shutdown();
         pipeline.wait().await.expect("Failed to wait for pipeline");
     }
 
@@ -406,9 +408,9 @@ async fn test_pipeline_recovers_from_invalidated_slot() {
     sqlx::query("checkpoint").execute(&db.pool).await.unwrap();
 
     // Verify slot is invalidated
-    let wal_status: String = sqlx::query_scalar(&format!(
+    let wal_status: String = sqlx::query_scalar(AssertSqlSafe(format!(
         "select wal_status from pg_replication_slots where slot_name = '{slot_name}'"
-    ))
+    )))
     .fetch_one(&db.pool)
     .await
     .unwrap();
@@ -458,9 +460,9 @@ async fn test_pipeline_recovers_from_invalidated_slot() {
     );
 
     // Verify old slot was dropped (ETL will create new one on restart)
-    let old_slot_dropped: bool = sqlx::query_scalar(&format!(
+    let old_slot_dropped: bool = sqlx::query_scalar(AssertSqlSafe(format!(
         "SELECT NOT EXISTS(SELECT 1 FROM pg_replication_slots WHERE slot_name = '{slot_name}')"
-    ))
+    )))
     .fetch_one(&db.pool)
     .await
     .unwrap();
@@ -522,7 +524,9 @@ async fn test_pipeline_recovers_from_invalidated_slot() {
     // Step 6: Restart pipeline - ETL will create a new slot and run DataSync (which we skip)
     // When replication events arrive, handle_failover() will COPY missed events and clear checkpoint
     {
-        let state_store = PostgresStore::new(pipeline_id, db.config.clone());
+        let state_store = PostgresStore::new(pipeline_id, db.config.clone())
+            .await
+            .expect("Failed to create PostgresStore");
         let pgstream = PgStream::create(stream_config.clone(), sink.clone(), state_store.clone())
             .await
             .expect("Failed to create PgStream");
@@ -538,9 +542,9 @@ async fn test_pipeline_recovers_from_invalidated_slot() {
         // Wait for slot to be created and tables to reach sync_done state
         let mut tables_synced = false;
         for _ in 0..60 {
-            let slot_exists: bool = sqlx::query_scalar(&format!(
+            let slot_exists: bool = sqlx::query_scalar(AssertSqlSafe(format!(
                 "SELECT EXISTS(SELECT 1 FROM pg_replication_slots WHERE slot_name = '{slot_name}')"
-            ))
+            )))
             .fetch_one(&db.pool)
             .await
             .unwrap();
@@ -619,15 +623,14 @@ async fn test_pipeline_recovers_from_invalidated_slot() {
         );
 
         // Graceful shutdown
-        let shutdown_tx = pipeline.shutdown_tx();
-        let _ = shutdown_tx.shutdown();
+        pipeline.shutdown();
         let _ = pipeline.wait().await;
     }
 
     // Verify the slot exists and is healthy
-    let slot_info: Option<(String, Option<String>)> = sqlx::query_as(&format!(
+    let slot_info: Option<(String, Option<String>)> = sqlx::query_as(AssertSqlSafe(format!(
         "SELECT slot_name, wal_status FROM pg_replication_slots WHERE slot_name = '{slot_name}'"
-    ))
+    )))
     .fetch_optional(&db.pool)
     .await
     .unwrap();
@@ -642,6 +645,14 @@ async fn test_pipeline_recovers_from_invalidated_slot() {
         assert!(
             wal_status.as_deref() != Some("lost"),
             "Slot should remain healthy after pipeline restart, got wal_status: {wal_status:?}"
+        );
+    }
+
+    if failover {
+        assert_eq!(
+            slot_failover(&db.pool, &slot_name).await,
+            Some(true),
+            "Recovered slot should be recreated as a failover slot"
         );
     }
 
@@ -695,7 +706,9 @@ async fn test_slot_recovery_preserves_existing_failover_checkpoint() {
 
     // Start and stop pipeline once to create the replication slot.
     {
-        let state_store = PostgresStore::new(pipeline_id, db.config.clone());
+        let state_store = PostgresStore::new(pipeline_id, db.config.clone())
+            .await
+            .expect("Failed to create PostgresStore");
         let sink = MemorySink::new();
         let pgstream = PgStream::create(stream_config.clone(), sink, state_store.clone())
             .await
@@ -708,9 +721,9 @@ async fn test_slot_recovery_preserves_existing_failover_checkpoint() {
 
         let mut slot_created = false;
         for _ in 0..30 {
-            let slot_exists: bool = sqlx::query_scalar(&format!(
+            let slot_exists: bool = sqlx::query_scalar(AssertSqlSafe(format!(
                 "SELECT EXISTS(SELECT 1 FROM pg_replication_slots WHERE slot_name = '{slot_name}')"
-            ))
+            )))
             .fetch_one(&db.pool)
             .await
             .unwrap();
@@ -725,10 +738,7 @@ async fn test_slot_recovery_preserves_existing_failover_checkpoint() {
 
         assert!(slot_created, "Replication slot should be created");
 
-        let shutdown_tx = pipeline.shutdown_tx();
-        shutdown_tx
-            .shutdown()
-            .expect("Failed to send shutdown signal");
+        pipeline.shutdown();
         pipeline.wait().await.expect("Failed to wait for pipeline");
     }
 
@@ -795,17 +805,17 @@ async fn test_slot_recovery_preserves_existing_failover_checkpoint() {
         .unwrap();
     sqlx::query("checkpoint").execute(&db.pool).await.unwrap();
 
-    let wal_status: String = sqlx::query_scalar(&format!(
+    let wal_status: String = sqlx::query_scalar(AssertSqlSafe(format!(
         "SELECT wal_status FROM pg_replication_slots WHERE slot_name = '{slot_name}'"
-    ))
+    )))
     .fetch_one(&db.pool)
     .await
     .unwrap();
     assert_eq!(wal_status, "lost", "Slot should be invalidated");
 
-    let confirmed_lsn: Option<String> = sqlx::query_scalar(&format!(
+    let confirmed_lsn: Option<String> = sqlx::query_scalar(AssertSqlSafe(format!(
         "SELECT confirmed_flush_lsn::text FROM pg_replication_slots WHERE slot_name = '{slot_name}'"
-    ))
+    )))
     .fetch_one(&db.pool)
     .await
     .unwrap();

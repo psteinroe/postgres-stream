@@ -1,7 +1,7 @@
 use std::borrow::Cow;
 
 use postgres_stream::{migrations::migrate_pgstream, test_utils::TestDatabase};
-use sqlx::{Row, migrate::Migrator};
+use sqlx::{AssertSqlSafe, Row, migrate::Migrator};
 
 const EXTRACT_SUBSCRIPTIONS_VERSION: i64 = 1_786_434_463_000;
 static CORE_MIGRATOR: Migrator = sqlx::migrate!("./migrations");
@@ -36,7 +36,7 @@ async fn apply_legacy_core_migrations(database: &TestDatabase) {
         ..Migrator::DEFAULT
     };
     migrator
-        .run_direct(&mut *connection)
+        .run_direct(None, &mut *connection, false)
         .await
         .expect("Failed to apply legacy core migrations through SQLx");
 }
@@ -244,9 +244,9 @@ async fn package_owner_manages_triggers_without_runtime_table_privileges() {
         .expect("Failed to create pgstream runtime role");
 
     let database_name = database.config.name.replace('"', "\"\"");
-    sqlx::query(&format!(
+    sqlx::query(AssertSqlSafe(format!(
         "grant create on database \"{database_name}\" to app_owner"
-    ))
+    )))
     .execute(&database.pool)
     .await
     .expect("Failed to grant schema creation");

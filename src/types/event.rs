@@ -1,10 +1,11 @@
 use etl::{
+    data::{Cell, TableRow},
     error::{ErrorKind, EtlResult},
     etl_error,
-    types::{Cell, ColumnSchema, PgLsn, TableRow},
+    event::Event,
+    schema::{ColumnSchema, PgLsn},
 };
-
-use etl::types::Event;
+use tokio_postgres::types::Timestamp;
 
 use crate::types::StreamId;
 
@@ -92,13 +93,13 @@ pub fn convert_event_from_table(
     let mut lsn = None;
 
     for (idx, col) in column_schemas.iter().enumerate() {
-        let Some(cell) = table_row.values.get_mut(idx) else {
+        let Some(cell) = table_row.values_mut().get_mut(idx) else {
             continue;
         };
 
         match (col.name.as_str(), std::mem::replace(cell, Cell::Null)) {
             ("id", Cell::Uuid(v)) => id = Some(v.to_string()),
-            ("created_at", Cell::TimestampTz(ts)) => created_at = Some(ts),
+            ("created_at", Cell::TimestampTz(Timestamp::Value(ts))) => created_at = Some(ts),
             ("payload", Cell::Json(v)) => payload = Some(v),
             ("metadata", Cell::Json(v)) => metadata = Some(v),
             ("stream_id", Cell::I64(v)) => stream_id = Some(StreamId::from(v as u64)),
@@ -161,19 +162,29 @@ pub fn convert_stream_events_from_events(
 mod tests {
     use super::*;
     use chrono::{TimeZone, Utc};
-    use etl::types::{InsertEvent, PgLsn, TableId};
+    use etl::event::InsertEvent;
+    use etl::schema::{ReplicatedTableSchema, TableId, TableName, TableSchema};
+    use std::sync::Arc;
     use tokio_postgres::types::Type;
     use uuid::Uuid;
 
     fn make_column_schemas() -> Vec<ColumnSchema> {
         vec![
-            ColumnSchema::new("id".to_string(), Type::UUID, -1, false, true),
-            ColumnSchema::new("created_at".to_string(), Type::TIMESTAMPTZ, -1, false, true),
-            ColumnSchema::new("payload".to_string(), Type::JSONB, -1, true, false),
-            ColumnSchema::new("metadata".to_string(), Type::JSONB, -1, true, false),
-            ColumnSchema::new("stream_id".to_string(), Type::INT8, -1, false, false),
-            ColumnSchema::new("lsn".to_string(), Type::TEXT, -1, true, false),
+            ColumnSchema::new("id".to_string(), Type::UUID, -1, 1, false),
+            ColumnSchema::new("created_at".to_string(), Type::TIMESTAMPTZ, -1, 2, false),
+            ColumnSchema::new("payload".to_string(), Type::JSONB, -1, 3, true),
+            ColumnSchema::new("metadata".to_string(), Type::JSONB, -1, 4, true),
+            ColumnSchema::new("stream_id".to_string(), Type::INT8, -1, 5, false),
+            ColumnSchema::new("lsn".to_string(), Type::TEXT, -1, 6, true),
         ]
+    }
+
+    fn make_replicated_table_schema() -> ReplicatedTableSchema {
+        ReplicatedTableSchema::all(Arc::new(TableSchema::new(
+            TableId::new(1),
+            TableName::new("pgstream".to_string(), "events".to_string()),
+            make_column_schemas(),
+        )))
     }
 
     fn make_table_row(
@@ -181,16 +192,14 @@ mod tests {
         created_at: chrono::DateTime<Utc>,
         payload: serde_json::Value,
     ) -> TableRow {
-        TableRow {
-            values: vec![
-                Cell::Uuid(id),
-                Cell::TimestampTz(created_at),
-                Cell::Json(payload),
-                Cell::Null,                        // metadata
-                Cell::I64(1),                      // stream_id
-                Cell::String("0/100".to_string()), // lsn (parsed to PgLsn)
-            ],
-        }
+        TableRow::new(vec![
+            Cell::Uuid(id),
+            Cell::TimestampTz(Timestamp::Value(created_at)),
+            Cell::Json(payload),
+            Cell::Null,                        // metadata
+            Cell::I64(1),                      // stream_id
+            Cell::String("0/100".to_string()), // lsn (parsed to PgLsn)
+        ])
     }
 
     fn make_table_row_without_lsn(
@@ -198,16 +207,14 @@ mod tests {
         created_at: chrono::DateTime<Utc>,
         payload: serde_json::Value,
     ) -> TableRow {
-        TableRow {
-            values: vec![
-                Cell::Uuid(id),
-                Cell::TimestampTz(created_at),
-                Cell::Json(payload),
-                Cell::Null,   // metadata
-                Cell::I64(1), // stream_id
-                Cell::Null,   // lsn (null for events before migration)
-            ],
-        }
+        TableRow::new(vec![
+            Cell::Uuid(id),
+            Cell::TimestampTz(Timestamp::Value(created_at)),
+            Cell::Json(payload),
+            Cell::Null,   // metadata
+            Cell::I64(1), // stream_id
+            Cell::Null,   // lsn (null for events before migration)
+        ])
     }
 
     #[test]
@@ -249,16 +256,14 @@ mod tests {
     #[test]
     fn test_convert_event_from_table_missing_id() {
         let column_schemas = make_column_schemas();
-        let mut table_row = TableRow {
-            values: vec![
-                Cell::Null, // Missing id
-                Cell::TimestampTz(Utc::now()),
-                Cell::Json(serde_json::json!({"test": "data"})),
-                Cell::Null,
-                Cell::I64(1),
-                Cell::Null, // lsn
-            ],
-        };
+        let mut table_row = TableRow::new(vec![
+            Cell::Null, // Missing id
+            Cell::TimestampTz(Timestamp::Value(Utc::now())),
+            Cell::Json(serde_json::json!({"test": "data"})),
+            Cell::Null,
+            Cell::I64(1),
+            Cell::Null, // lsn
+        ]);
 
         let result = convert_event_from_table(&mut table_row, &column_schemas, None);
 
@@ -269,16 +274,14 @@ mod tests {
     #[test]
     fn test_convert_event_from_table_missing_created_at() {
         let column_schemas = make_column_schemas();
-        let mut table_row = TableRow {
-            values: vec![
-                Cell::Uuid(Uuid::new_v4()),
-                Cell::Null, // Missing created_at
-                Cell::Json(serde_json::json!({"test": "data"})),
-                Cell::Null,
-                Cell::I64(1),
-                Cell::Null, // lsn
-            ],
-        };
+        let mut table_row = TableRow::new(vec![
+            Cell::Uuid(Uuid::new_v4()),
+            Cell::Null, // Missing created_at
+            Cell::Json(serde_json::json!({"test": "data"})),
+            Cell::Null,
+            Cell::I64(1),
+            Cell::Null, // lsn
+        ]);
 
         let result = convert_event_from_table(&mut table_row, &column_schemas, None);
 
@@ -294,16 +297,14 @@ mod tests {
     #[test]
     fn test_convert_event_from_table_missing_payload() {
         let column_schemas = make_column_schemas();
-        let mut table_row = TableRow {
-            values: vec![
-                Cell::Uuid(Uuid::new_v4()),
-                Cell::TimestampTz(Utc::now()),
-                Cell::Null, // Missing payload
-                Cell::Null,
-                Cell::I64(1),
-                Cell::Null, // lsn
-            ],
-        };
+        let mut table_row = TableRow::new(vec![
+            Cell::Uuid(Uuid::new_v4()),
+            Cell::TimestampTz(Timestamp::Value(Utc::now())),
+            Cell::Null, // Missing payload
+            Cell::Null,
+            Cell::I64(1),
+            Cell::Null, // lsn
+        ]);
 
         let result = convert_event_from_table(&mut table_row, &column_schemas, None);
 
@@ -350,9 +351,9 @@ mod tests {
 
         let events = vec![
             Event::Insert(InsertEvent {
-                start_lsn: PgLsn::from(0),
                 commit_lsn: "0/200".parse().unwrap(),
-                table_id: TableId::new(1),
+                tx_ordinal: 0,
+                replicated_table_schema: make_replicated_table_schema(),
                 table_row: make_table_row(id, ts, serde_json::json!({"test": 1})),
             }),
             Event::Unsupported,
@@ -386,19 +387,17 @@ mod tests {
 
         // Insert event with missing id
         let events = vec![Event::Insert(InsertEvent {
-            start_lsn: PgLsn::from(0),
             commit_lsn: PgLsn::from(0),
-            table_id: TableId::new(1),
-            table_row: TableRow {
-                values: vec![
-                    Cell::Null, // Missing id
-                    Cell::TimestampTz(Utc::now()),
-                    Cell::Json(serde_json::json!({"test": 1})),
-                    Cell::Null,
-                    Cell::I64(1),
-                    Cell::Null, // lsn
-                ],
-            },
+            tx_ordinal: 0,
+            replicated_table_schema: make_replicated_table_schema(),
+            table_row: TableRow::new(vec![
+                Cell::Null, // Missing id
+                Cell::TimestampTz(Timestamp::Value(Utc::now())),
+                Cell::Json(serde_json::json!({"test": 1})),
+                Cell::Null,
+                Cell::I64(1),
+                Cell::Null, // lsn
+            ]),
         })];
 
         let result = convert_stream_events_from_events(events, &column_schemas);

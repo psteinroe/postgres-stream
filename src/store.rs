@@ -1,10 +1,10 @@
 use chrono::{DateTime, Utc};
 use etl::{
-    config::{ETL_STATE_MANAGEMENT_OPTIONS, IntoConnectOptions, PgConnectionConfig},
+    config::{IntoConnectOptions, PgConnectionConfig},
     error::{ErrorKind, EtlResult},
     etl_error,
-    store::schema::SchemaStore,
-    types::{TableId, TableSchema},
+    schema::{SnapshotId, TableId, TableSchema},
+    store::SchemaStore,
 };
 use sqlx::PgPool;
 use sqlx::postgres::PgPoolOptions;
@@ -12,7 +12,7 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 
 use crate::{
-    config::StreamConfig,
+    config::{STATE_MANAGEMENT_OPTIONS, StreamConfig},
     maintenance::PartitionInfo,
     queries::{
         create_partition, drop_partition, fetch_event, fetch_events_table_id, fetch_stream_state,
@@ -110,7 +110,7 @@ impl<S: SchemaStore> StreamStore<S> {
 
     /// Acquires a temporary connection that will be closed when dropped.
     async fn connect_temporary(source_config: &PgConnectionConfig) -> EtlResult<PgPool> {
-        let options = source_config.with_db(Some(&ETL_STATE_MANAGEMENT_OPTIONS));
+        let options = source_config.with_db(Some(&STATE_MANAGEMENT_OPTIONS));
 
         let pool = PgPoolOptions::new()
             .min_connections(NUM_POOL_CONNECTIONS)
@@ -245,7 +245,7 @@ impl<S: SchemaStore> StreamStore<S> {
 
     pub async fn get_events_table_schema(&self) -> EtlResult<Arc<TableSchema>> {
         self.schema_store
-            .get_table_schema(&self.events_table_id)
+            .get_table_schema(&self.events_table_id, SnapshotId::max())
             .await?
             .ok_or_else(|| {
                 etl_error!(

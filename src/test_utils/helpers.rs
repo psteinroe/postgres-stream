@@ -1,11 +1,19 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use chrono::Utc;
-use etl::types::{Cell, Event, InsertEvent, PgLsn, TableId, TableRow};
+use std::sync::Arc;
+
+use etl::data::{Cell, TableRow};
+use etl::destination::{Destination, DestinationWriteStatus, WriteEventsDurability};
+use etl::error::EtlResult;
+use etl::event::{Event, InsertEvent};
+use etl::schema::{PgLsn, ReplicatedTableSchema, TableId};
+use tokio_postgres::types::Timestamp;
 use uuid::Uuid;
 
-use crate::config::StreamConfig;
+use crate::config::{BatchConfig, StreamConfig};
 use crate::test_utils::TestDatabase;
+use crate::test_utils::events_table_schema;
 use crate::types::EventIdentifier;
 
 /// Counter for generating unique pipeline IDs across tests
@@ -30,10 +38,11 @@ pub fn test_stream_config_with_id(db: &TestDatabase, id: u64) -> StreamConfig {
     StreamConfig {
         id,
         pg_connection: db.config.clone(),
-        batch: etl::config::BatchConfig {
+        batch: BatchConfig {
             max_size: 100,
             max_fill_ms: 1000,
         },
+        failover: false,
     }
 }
 
@@ -50,18 +59,18 @@ pub fn make_test_event(table_id: TableId, payload: serde_json::Value) -> Event {
         .unwrap();
 
     Event::Insert(InsertEvent {
-        start_lsn: PgLsn::from(0),
         commit_lsn: PgLsn::from(0),
-        table_id,
-        table_row: TableRow {
-            values: vec![
-                Cell::Uuid(Uuid::new_v4()),   // id
-                Cell::Json(payload),          // payload
-                Cell::Null,                   // metadata
-                Cell::I64(1),                 // stream_id
-                Cell::TimestampTz(timestamp), // created_at
-            ],
-        },
+        tx_ordinal: 0,
+        replicated_table_schema: ReplicatedTableSchema::all(Arc::new(events_table_schema(
+            table_id,
+        ))),
+        table_row: TableRow::new(vec![
+            Cell::Uuid(Uuid::new_v4()),                     // id
+            Cell::Json(payload),                            // payload
+            Cell::Null,                                     // metadata
+            Cell::I64(1),                                   // stream_id
+            Cell::TimestampTz(Timestamp::Value(timestamp)), // created_at
+        ]),
     })
 }
 
@@ -74,18 +83,18 @@ pub fn make_event_with_id(
     payload: serde_json::Value,
 ) -> Event {
     Event::Insert(InsertEvent {
-        start_lsn: PgLsn::from(0),
         commit_lsn: PgLsn::from(0),
-        table_id,
-        table_row: TableRow {
-            values: vec![
-                Cell::Uuid(Uuid::parse_str(&id.id).unwrap()), // id
-                Cell::Json(payload),                          // payload
-                Cell::Null,                                   // metadata
-                Cell::I64(1),                                 // stream_id
-                Cell::TimestampTz(id.created_at),             // created_at
-            ],
-        },
+        tx_ordinal: 0,
+        replicated_table_schema: ReplicatedTableSchema::all(Arc::new(events_table_schema(
+            table_id,
+        ))),
+        table_row: TableRow::new(vec![
+            Cell::Uuid(Uuid::parse_str(&id.id).unwrap()),       // id
+            Cell::Json(payload),                                // payload
+            Cell::Null,                                         // metadata
+            Cell::I64(1),                                       // stream_id
+            Cell::TimestampTz(Timestamp::Value(id.created_at)), // created_at
+        ]),
     })
 }
 
@@ -123,4 +132,13 @@ pub async fn insert_events_to_db(db: &TestDatabase, count: usize) -> Vec<EventId
     }
 
     event_ids
+}
+
+/// Calls [`Destination::write_events`] and waits for the reported write result.
+pub async fn write_events<D: Destination>(
+    destination: &D,
+    events: Vec<Event>,
+) -> EtlResult<DestinationWriteStatus> {
+    etl::test_utils::destination::write_events(destination, WriteEventsDurability::MayDefer, events)
+        .await
 }

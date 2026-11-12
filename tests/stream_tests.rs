@@ -1,12 +1,14 @@
 use chrono::Duration;
+use etl::data::Cell;
 use etl::destination::Destination;
-use etl::store::both::postgres::PostgresStore;
-use etl::types::{Cell, Event, PgLsn};
+use etl::event::Event;
+use etl::schema::PgLsn;
+use etl::store::PostgresStore;
 use postgres_stream::sink::memory::MemorySink;
 use postgres_stream::stream::PgStream;
 use postgres_stream::test_utils::{
     FailableSink, TestDatabase, create_postgres_store, create_postgres_store_with_table_id,
-    insert_events_to_db, make_event_with_id, make_test_event, test_stream_config,
+    insert_events_to_db, make_event_with_id, make_test_event, test_stream_config, write_events,
 };
 use postgres_stream::types::{StreamStatus, TriggeredEvent};
 use std::collections::HashSet;
@@ -53,14 +55,13 @@ async fn test_pgstream_write_events_via_destination_trait() {
         insert_event.commit_lsn = commit_lsn;
         insert_event
             .table_row
-            .values
+            .values_mut()
             .push(Cell::String("0/100".to_string()));
         event
     })
     .collect();
 
-    stream
-        .write_events(events)
+    write_events(&stream, events)
         .await
         .expect("Failed to write events");
 
@@ -98,8 +99,7 @@ async fn test_failover_sink_failure_enters_failover_mode() {
         first_event_id,
         serde_json::json!({"id": 1}),
     )];
-    stream
-        .write_events(events)
+    write_events(&stream, events)
         .await
         .expect("write_events should succeed even if sink fails");
 
@@ -136,37 +136,43 @@ async fn test_failover_recovery_replays_missed_events() {
     let all_event_ids = insert_events_to_db(&db, 6).await;
 
     sink.succeed_always();
-    stream
-        .write_events(vec![make_event_with_id(
+    write_events(
+        &stream,
+        vec![make_event_with_id(
             table_id,
             all_event_ids.first().expect("Should have event 0"),
             serde_json::json!({"seq": 1}),
-        )])
-        .await
-        .unwrap();
+        )],
+    )
+    .await
+    .unwrap();
 
     sink.fail_on_call(1);
 
-    stream
-        .write_events(vec![make_event_with_id(
+    write_events(
+        &stream,
+        vec![make_event_with_id(
             table_id,
             all_event_ids.get(1).expect("Should have event 1"),
             serde_json::json!({"seq": 2}),
-        )])
-        .await
-        .unwrap();
+        )],
+    )
+    .await
+    .unwrap();
 
     assert_eq!(sink.call_count(), 2);
 
     sink.succeed_always();
-    stream
-        .write_events(vec![make_event_with_id(
+    write_events(
+        &stream,
+        vec![make_event_with_id(
             table_id,
             all_event_ids.get(5).expect("Should have event 5"),
             serde_json::json!({"seq": 6}),
-        )])
-        .await
-        .unwrap();
+        )],
+    )
+    .await
+    .unwrap();
 
     let published: Vec<TriggeredEvent> = sink.events().await;
 
@@ -209,37 +215,43 @@ async fn test_failover_with_no_missed_events() {
 
     // First event succeeds
     sink.succeed_always();
-    stream
-        .write_events(vec![make_event_with_id(
+    write_events(
+        &stream,
+        vec![make_event_with_id(
             table_id,
             event_ids.first().expect("Should have event 0"),
             serde_json::json!({"seq": 1}),
-        )])
-        .await
-        .unwrap();
+        )],
+    )
+    .await
+    .unwrap();
 
     // Second event fails, entering failover
     sink.fail_on_call(1);
-    stream
-        .write_events(vec![make_event_with_id(
+    write_events(
+        &stream,
+        vec![make_event_with_id(
             table_id,
             event_ids.get(1).expect("Should have event 1"),
             serde_json::json!({"seq": 2}),
-        )])
-        .await
-        .unwrap();
+        )],
+    )
+    .await
+    .unwrap();
 
     // Third event succeeds - should replay the failed event and then process the new one
     // Since event 1 failed and event 2 is the next, there are no "missed" events between them
     sink.succeed_always();
-    stream
-        .write_events(vec![make_event_with_id(
+    write_events(
+        &stream,
+        vec![make_event_with_id(
             table_id,
             event_ids.get(2).expect("Should have event 2"),
             serde_json::json!({"seq": 3}),
-        )])
-        .await
-        .unwrap();
+        )],
+    )
+    .await
+    .unwrap();
 
     let published = sink.events().await;
 
@@ -281,47 +293,55 @@ async fn test_failover_multiple_consecutive_failures() {
 
     // Event 0: success
     sink.succeed_always();
-    stream
-        .write_events(vec![make_event_with_id(
+    write_events(
+        &stream,
+        vec![make_event_with_id(
             table_id,
             event_ids.first().expect("Should have event 0"),
             serde_json::json!({"seq": 1}),
-        )])
-        .await
-        .unwrap();
+        )],
+    )
+    .await
+    .unwrap();
 
     // Event 1: fail - enters failover
     sink.fail_on_call(1);
-    stream
-        .write_events(vec![make_event_with_id(
+    write_events(
+        &stream,
+        vec![make_event_with_id(
             table_id,
             event_ids.get(1).expect("Should have event 1"),
             serde_json::json!({"seq": 2}),
-        )])
-        .await
-        .unwrap();
+        )],
+    )
+    .await
+    .unwrap();
 
     // Event 2: fail again - should retry event 1 first, then fail on event 2
     sink.fail_on_call(2);
-    stream
-        .write_events(vec![make_event_with_id(
+    write_events(
+        &stream,
+        vec![make_event_with_id(
             table_id,
             event_ids.get(2).expect("Should have event 2"),
             serde_json::json!({"seq": 3}),
-        )])
-        .await
-        .unwrap();
+        )],
+    )
+    .await
+    .unwrap();
 
     // Event 4: succeed - should replay events 1, 2, 3 and then process 4
     sink.succeed_always();
-    stream
-        .write_events(vec![make_event_with_id(
+    write_events(
+        &stream,
+        vec![make_event_with_id(
             table_id,
             event_ids.get(4).expect("Should have event 4"),
             serde_json::json!({"seq": 5}),
-        )])
-        .await
-        .unwrap();
+        )],
+    )
+    .await
+    .unwrap();
 
     let published = sink.events().await;
 
@@ -375,36 +395,42 @@ async fn test_failover_large_gap_recovery() {
 
     // Event 0: success
     sink.succeed_always();
-    stream
-        .write_events(vec![make_event_with_id(
+    write_events(
+        &stream,
+        vec![make_event_with_id(
             table_id,
             event_ids.first().expect("Should have event 0"),
             serde_json::json!({"seq": 1}),
-        )])
-        .await
-        .unwrap();
+        )],
+    )
+    .await
+    .unwrap();
 
     // Event 5: fail - creates gap of events 1-4
     sink.fail_on_call(1);
-    stream
-        .write_events(vec![make_event_with_id(
+    write_events(
+        &stream,
+        vec![make_event_with_id(
             table_id,
             event_ids.get(5).expect("Should have event 5"),
             serde_json::json!({"seq": 6}),
-        )])
-        .await
-        .unwrap();
+        )],
+    )
+    .await
+    .unwrap();
 
     // Event 49: succeed - should replay all missed events (5-48) plus new event
     sink.succeed_always();
-    stream
-        .write_events(vec![make_event_with_id(
+    write_events(
+        &stream,
+        vec![make_event_with_id(
             table_id,
             event_ids.get(49).expect("Should have event 49"),
             serde_json::json!({"seq": 50}),
-        )])
-        .await
-        .unwrap();
+        )],
+    )
+    .await
+    .unwrap();
 
     let published = sink.events().await;
 
@@ -457,35 +483,42 @@ async fn test_failover_recovery_does_not_hang_when_replay_exceeds_batch_size() {
 
     // Event 0 succeeds.
     sink.succeed_always();
-    stream
-        .write_events(vec![make_event_with_id(
+    write_events(
+        &stream,
+        vec![make_event_with_id(
             table_id,
             event_ids.first().expect("Should have event 0"),
             serde_json::json!({"seq": 1}),
-        )])
-        .await
-        .unwrap();
+        )],
+    )
+    .await
+    .unwrap();
 
     // Event 1 fails, entering failover mode.
     sink.fail_on_call(1);
-    stream
-        .write_events(vec![make_event_with_id(
+    write_events(
+        &stream,
+        vec![make_event_with_id(
             table_id,
             event_ids.get(1).expect("Should have event 1"),
             serde_json::json!({"seq": 2}),
-        )])
-        .await
-        .unwrap();
+        )],
+    )
+    .await
+    .unwrap();
 
     // Event 249 should trigger failover replay with a gap > batch size.
     sink.succeed_always();
     let recovery_result = tokio::time::timeout(
         StdDuration::from_secs(20),
-        stream.write_events(vec![make_event_with_id(
-            table_id,
-            event_ids.get(249).expect("Should have event 249"),
-            serde_json::json!({"seq": 250}),
-        )]),
+        write_events(
+            &stream,
+            vec![make_event_with_id(
+                table_id,
+                event_ids.get(249).expect("Should have event 249"),
+                serde_json::json!({"seq": 250}),
+            )],
+        ),
     )
     .await;
 
@@ -520,25 +553,29 @@ async fn test_failover_checkpoint_persists_across_stream_instances() {
 
     // Event 0: success
     sink.succeed_always();
-    stream1
-        .write_events(vec![make_event_with_id(
+    write_events(
+        &stream1,
+        vec![make_event_with_id(
             table_id,
             event_ids.first().expect("Should have event 0"),
             serde_json::json!({"seq": 1}),
-        )])
-        .await
-        .unwrap();
+        )],
+    )
+    .await
+    .unwrap();
 
     // Event 1: fail - enters failover
     sink.fail_on_call(1);
-    stream1
-        .write_events(vec![make_event_with_id(
+    write_events(
+        &stream1,
+        vec![make_event_with_id(
             table_id,
             event_ids.get(1).expect("Should have event 1"),
             serde_json::json!({"seq": 2}),
-        )])
-        .await
-        .unwrap();
+        )],
+    )
+    .await
+    .unwrap();
 
     // Drop the first stream (simulating restart)
     drop(stream1);
@@ -558,14 +595,16 @@ async fn test_failover_checkpoint_persists_across_stream_instances() {
 
     // Event 2: succeed - should recover
     sink.succeed_always();
-    stream2
-        .write_events(vec![make_event_with_id(
+    write_events(
+        &stream2,
+        vec![make_event_with_id(
             table_id,
             event_ids.get(2).expect("Should have event 2"),
             serde_json::json!({"seq": 3}),
-        )])
-        .await
-        .unwrap();
+        )],
+    )
+    .await
+    .unwrap();
 
     let published = sink.events().await;
 
@@ -662,25 +701,29 @@ async fn test_failover_flaky_sink_mid_replay_recovers() {
 
     // Event 0: success
     sink.succeed_always();
-    stream
-        .write_events(vec![make_event_with_id(
+    write_events(
+        &stream,
+        vec![make_event_with_id(
             table_id,
             event_ids.first().expect("Should have event 0"),
             serde_json::json!({"seq": 1}),
-        )])
-        .await
-        .unwrap();
+        )],
+    )
+    .await
+    .unwrap();
 
     // Event 1: fail - enters failover (call 1)
     sink.fail_on_call(1);
-    stream
-        .write_events(vec![make_event_with_id(
+    write_events(
+        &stream,
+        vec![make_event_with_id(
             table_id,
             event_ids.get(1).expect("Should have event 1"),
             serde_json::json!({"seq": 2}),
-        )])
-        .await
-        .unwrap();
+        )],
+    )
+    .await
+    .unwrap();
 
     let (status, _) = stream.store().get_stream_state().await.unwrap();
     assert!(
@@ -690,14 +733,16 @@ async fn test_failover_flaky_sink_mid_replay_recovers() {
 
     // Next tick: checkpoint republish succeeds (call 2), but replay publish fails (call 3)
     sink.fail_on_call(3);
-    stream
-        .write_events(vec![make_event_with_id(
+    write_events(
+        &stream,
+        vec![make_event_with_id(
             table_id,
             event_ids.get(5).expect("Should have event 5"),
             serde_json::json!({"seq": 6}),
-        )])
-        .await
-        .unwrap();
+        )],
+    )
+    .await
+    .unwrap();
 
     // Should still be in failover because replay failed mid-way
     let (status, _) = stream.store().get_stream_state().await.unwrap();
@@ -708,14 +753,16 @@ async fn test_failover_flaky_sink_mid_replay_recovers() {
 
     // Next tick: everything succeeds - full recovery
     sink.succeed_always();
-    stream
-        .write_events(vec![make_event_with_id(
+    write_events(
+        &stream,
+        vec![make_event_with_id(
             table_id,
             event_ids.get(5).expect("Should have event 5"),
             serde_json::json!({"seq": 6}),
-        )])
-        .await
-        .unwrap();
+        )],
+    )
+    .await
+    .unwrap();
 
     let (status, _) = stream.store().get_stream_state().await.unwrap();
     assert!(
@@ -752,25 +799,29 @@ async fn test_failover_flaky_sink_checkpoint_publish_retries() {
 
     // Event 0: success (call 0)
     sink.succeed_always();
-    stream
-        .write_events(vec![make_event_with_id(
+    write_events(
+        &stream,
+        vec![make_event_with_id(
             table_id,
             event_ids.first().expect("Should have event 0"),
             serde_json::json!({"seq": 1}),
-        )])
-        .await
-        .unwrap();
+        )],
+    )
+    .await
+    .unwrap();
 
     // Event 1: fail - enters failover (call 1)
     sink.fail_on_call(1);
-    stream
-        .write_events(vec![make_event_with_id(
+    write_events(
+        &stream,
+        vec![make_event_with_id(
             table_id,
             event_ids.get(1).expect("Should have event 1"),
             serde_json::json!({"seq": 2}),
-        )])
-        .await
-        .unwrap();
+        )],
+    )
+    .await
+    .unwrap();
 
     let (status, _) = stream.store().get_stream_state().await.unwrap();
     assert!(
@@ -780,14 +831,16 @@ async fn test_failover_flaky_sink_checkpoint_publish_retries() {
 
     // Next tick: checkpoint republish fails (call 2) - sink still unavailable
     sink.fail_on_call(2);
-    stream
-        .write_events(vec![make_event_with_id(
+    write_events(
+        &stream,
+        vec![make_event_with_id(
             table_id,
             event_ids.get(3).expect("Should have event 3"),
             serde_json::json!({"seq": 4}),
-        )])
-        .await
-        .unwrap();
+        )],
+    )
+    .await
+    .unwrap();
 
     // Should still be in failover
     let (status, _) = stream.store().get_stream_state().await.unwrap();
@@ -798,14 +851,16 @@ async fn test_failover_flaky_sink_checkpoint_publish_retries() {
 
     // Next tick: everything succeeds - full recovery
     sink.succeed_always();
-    stream
-        .write_events(vec![make_event_with_id(
+    write_events(
+        &stream,
+        vec![make_event_with_id(
             table_id,
             event_ids.get(3).expect("Should have event 3"),
             serde_json::json!({"seq": 4}),
-        )])
-        .await
-        .unwrap();
+        )],
+    )
+    .await
+    .unwrap();
 
     let (status, _) = stream.store().get_stream_state().await.unwrap();
     assert!(

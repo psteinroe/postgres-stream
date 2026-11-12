@@ -16,7 +16,7 @@ When the sink is unavailable:
 
 1. Checkpoint saved at failed event
 2. Retries until sink recovers
-3. Replays missed events via `COPY`
+3. Replays missed events from the events table
 4. Resumes normal streaming
 
 ## Slot Invalidation
@@ -29,6 +29,10 @@ When the replication slot is invalidated:
 4. Replays from checkpoint
 
 No operator intervention required.
+
+## Database Failover
+
+Replication slots normally live only on the primary, so a switchover or failover to a standby loses the slot. On Postgres 17+, set [`stream.failover`](../reference/configuration.md#streamfailover) to `true` to make the slot a failover slot that standbys keep in sync. If the slot is lost anyway, slot recovery replays the missed events from the events table.
 
 ## Guarantees
 

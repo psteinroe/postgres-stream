@@ -2,17 +2,19 @@ use std::io::BufReader;
 use std::num::NonZeroI32;
 use std::sync::Arc;
 
-use etl::config::{
-    ETL_REPLICATION_OPTIONS, ETL_STATE_MANAGEMENT_OPTIONS, IntoConnectOptions, PgConnectionConfig,
-};
+use chrono::{DateTime, Utc};
+use etl::config::{IntoConnectOptions, PgConnectionConfig};
 use etl::error::EtlResult;
-use etl_postgres::replication::extract_server_version;
+use etl_postgres::source::extract_server_version;
+use futures::{Stream, StreamExt};
 use tokio_postgres::tls::MakeTlsConnect;
-use tokio_postgres::{Client, Config, Connection, CopyOutStream, NoTls, Socket};
+use tokio_postgres::types::ToSql;
+use tokio_postgres::{Client, Config, Connection, NoTls, Row, Socket};
 use tokio_rustls::rustls::{self, ClientConfig};
 use tracing::{Instrument, error, info};
 
-use crate::types::{EventIdentifier, StreamId};
+use crate::config::{REPLICATION_OPTIONS, STATE_MANAGEMENT_OPTIONS};
+use crate::types::{EventIdentifier, StreamId, TriggeredEvent};
 use crate::utils::tokio::MakeRustlsConnect;
 
 /// Spawns a background task to monitor a Postgres connection until it terminates.
@@ -40,7 +42,7 @@ where
 #[derive(Debug, Clone)]
 pub struct ReplayClient {
     stream_id: StreamId,
-    /// Connection used for COPY streaming of replay events.
+    /// Connection used for streaming replay events.
     copy_client: Arc<Client>,
     /// Separate connection used for checkpoint updates during replay.
     checkpoint_client: Arc<Client>,
@@ -50,7 +52,7 @@ pub struct ReplayClient {
 }
 
 /// Replay client uses tokio and a persistent connection to:
-/// - copy events from the events table via COPY stream
+/// - stream events from the events table
 /// - update replay checkpoint in the pgstream.streams table
 ///
 /// It is created when event replay is initiated, and dropped when all events are replayed.
@@ -74,7 +76,7 @@ impl ReplayClient {
     ) -> EtlResult<Self> {
         let copy_config: Config = pg_connection_config
             .clone()
-            .with_db(Some(&ETL_REPLICATION_OPTIONS));
+            .with_db(Some(&REPLICATION_OPTIONS));
 
         let (copy_client, copy_connection) = copy_config.connect(NoTls).await?;
 
@@ -85,7 +87,7 @@ impl ReplayClient {
         spawn_postgres_connection::<NoTls>(copy_connection);
 
         let checkpoint_config: Config =
-            pg_connection_config.with_db(Some(&ETL_STATE_MANAGEMENT_OPTIONS));
+            pg_connection_config.with_db(Some(&STATE_MANAGEMENT_OPTIONS));
         let (checkpoint_client, checkpoint_connection) = checkpoint_config.connect(NoTls).await?;
         spawn_postgres_connection::<NoTls>(checkpoint_connection);
 
@@ -108,7 +110,7 @@ impl ReplayClient {
     ) -> EtlResult<Self> {
         let copy_config: Config = pg_connection_config
             .clone()
-            .with_db(Some(&ETL_REPLICATION_OPTIONS));
+            .with_db(Some(&REPLICATION_OPTIONS));
 
         let mut root_store = rustls::RootCertStore::empty();
         if pg_connection_config.tls.enabled {
@@ -135,7 +137,7 @@ impl ReplayClient {
         spawn_postgres_connection::<MakeRustlsConnect>(copy_connection);
 
         let checkpoint_config: Config =
-            pg_connection_config.with_db(Some(&ETL_STATE_MANAGEMENT_OPTIONS));
+            pg_connection_config.with_db(Some(&STATE_MANAGEMENT_OPTIONS));
         let (checkpoint_client, checkpoint_connection) = checkpoint_config
             .connect(MakeRustlsConnect::new(tls_config))
             .await?;
@@ -157,29 +159,40 @@ impl ReplayClient {
         self.copy_client.is_closed() || self.checkpoint_client.is_closed()
     }
 
-    /// Gets events between two checkpoints (exclusive on both ends).
-    pub async fn get_events_copy_stream(
+    /// Streams events between two checkpoints (exclusive on both ends), ordered by
+    /// `(created_at, id)`.
+    ///
+    /// Rows are read lazily from the server as the stream is polled.
+    pub async fn get_events_stream(
         &self,
         from: &EventIdentifier,
         to: &EventIdentifier,
-    ) -> EtlResult<CopyOutStream> {
-        let copy_query = format!(
-            r#"
-                copy (
-                  select id, payload, metadata, stream_id, created_at, lsn
+    ) -> EtlResult<impl Stream<Item = EtlResult<TriggeredEvent>> + use<>> {
+        let stream_id = self.stream_id as i64;
+        let params: [&(dyn ToSql + Sync); 5] = [
+            &from.created_at,
+            &from.id,
+            &to.created_at,
+            &to.id,
+            &stream_id,
+        ];
+
+        let rows = self
+            .copy_client
+            .query_raw(
+                r#"
+                  select id::text as id, payload, metadata, stream_id, created_at, lsn::text as lsn
                   from pgstream.events
-                  where (created_at, id) > ('{}'::timestamptz, '{}'::uuid)
-                    and (created_at, id) < ('{}'::timestamptz, '{}'::uuid)
-                    and stream_id = {}
+                  where (created_at, id) > ($1::timestamptz, $2::text::uuid)
+                    and (created_at, id) < ($3::timestamptz, $4::text::uuid)
+                    and stream_id = $5
                   order by created_at, id
-                ) to stdout with (format text);
-            "#,
-            from.created_at, from.id, to.created_at, to.id, self.stream_id as i64
-        );
+                "#,
+                params,
+            )
+            .await?;
 
-        let stream = self.copy_client.copy_out_simple(&copy_query).await?;
-
-        Ok(stream)
+        Ok(rows.map(|row| event_from_row(&row?)))
     }
 
     /// Updates the failover checkpoint for the given stream.
@@ -203,4 +216,21 @@ impl ReplayClient {
             .await?;
         Ok(())
     }
+}
+
+/// Converts a row of the replay query into a [`TriggeredEvent`].
+fn event_from_row(row: &Row) -> EtlResult<TriggeredEvent> {
+    let id: String = row.try_get("id")?;
+    let created_at: DateTime<Utc> = row.try_get("created_at")?;
+    let stream_id: i64 = row.try_get("stream_id")?;
+    let lsn: Option<String> = row.try_get("lsn")?;
+
+    Ok(TriggeredEvent {
+        id: EventIdentifier::new(id, created_at),
+        payload: row.try_get("payload")?,
+        metadata: row.try_get("metadata")?,
+        stream_id: StreamId::from(stream_id as u64),
+        commit_lsn: None,
+        lsn: lsn.and_then(|lsn| lsn.parse().ok()),
+    })
 }

@@ -1,4 +1,4 @@
-use sqlx::{PgPool, prelude::FromRow};
+use sqlx::{AssertSqlSafe, PgPool, prelude::FromRow};
 
 #[derive(FromRow)]
 pub struct PartitionRecord {
@@ -41,13 +41,13 @@ pub async fn create_partition(
     let qualified_partition = format!("{schema_name}.{partition_name}");
     let qualified_table = format!("{schema_name}.{table_name}");
 
-    sqlx::query(&format!(
+    sqlx::query(AssertSqlSafe(format!(
         r#"
         create table if not exists {qualified_partition}
         partition of {qualified_table}
         for values from ('{range_start}') to ('{range_end}')
         "#
-    ))
+    )))
     .execute(pool)
     .await?;
 
@@ -61,9 +61,11 @@ pub async fn drop_partition(
     partition_name: &str,
 ) -> sqlx::Result<()> {
     let qualified_name = format!("{schema_name}.{partition_name}");
-    sqlx::query(&format!("drop table if exists {qualified_name}"))
-        .execute(pool)
-        .await?;
+    sqlx::query(AssertSqlSafe(format!(
+        "drop table if exists {qualified_name}"
+    )))
+    .execute(pool)
+    .await?;
 
     Ok(())
 }

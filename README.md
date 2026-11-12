@@ -39,6 +39,11 @@ While Postgres Stream provides strong durability guarantees, there are some cons
 - **Partition management** - Monitor partition growth if event volume is very high
 - **Not for dynamic subscriptions** - Each subscription change recreates database triggers
 
+## Requirements
+
+- Postgres 15+ with `wal_level=logical`, and a user with the `REPLICATION` privilege. Superuser is not required.
+- Postgres 17+ to make the replication slot a [failover slot](https://pg-stream.dev/reference/configuration#streamfailover) (`stream.failover: true`) that survives a switchover or failover to a standby.
+
 ## Supported Sinks
 
 | Sink | Use Case |

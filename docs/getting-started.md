@@ -2,8 +2,8 @@
 
 ## Requirements
 
-- **Postgres 15+** with `wal_level=logical`
-- User with `REPLICATION` privilege
+- **Postgres 15+** with `wal_level=logical` (17+ for [failover slots](reference/configuration.md#streamfailover))
+- User with `REPLICATION` privilege. Superuser is not required.
 
 Check your setting:
 ```sql
