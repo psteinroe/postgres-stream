@@ -190,7 +190,7 @@ Maximum time to fill a batch in seconds. Lower values reduce latency but may res
 
 Make the replication slot a [failover slot](https://www.postgresql.org/docs/current/logicaldecoding-explanation.html#LOGICALDECODING-REPLICATION-SLOTS-SYNCHRONIZATION) so it survives a switchover or failover to a standby. Requires Postgres 17 or newer; with an older server the stream fails to start when this is enabled.
 
-When enabled, a new slot is created with `FAILOVER`, and an existing slot is altered to be a failover slot on startup, without resyncing. A slot recreated after [slot invalidation](../concepts/failover.md#slot-invalidation) is also a failover slot.
+When enabled, a new slot is created with `FAILOVER`, and an existing slot is altered to be a failover slot on startup, without resyncing. A slot recreated after [slot loss](../concepts/failover.md#slot-loss) is also a failover slot.
 
 The standbys must synchronize failover slots before they can be used after promotion (`sync_replication_slots = on` and `hot_standby_feedback = on` on the standby, and the standby's physical slot in `synchronized_standby_slots` on the primary). Managed Postgres providers usually expose these as cluster parameters.
 

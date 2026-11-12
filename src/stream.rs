@@ -103,6 +103,7 @@ where
     /// Main processing tick for a batch of events.
     ///
     /// This will
+    /// - resolve a pending slot recovery
     /// - fetch the current stream status
     /// - handle maintenance task if due
     /// - handle failover if the stream is in failover status
@@ -111,6 +112,15 @@ where
     ///
     /// * `events`: Batch of stream events to process.
     async fn tick(&self, events: Vec<TriggeredEvent>) -> EtlResult<()> {
+        // After slot recovery, the first batch proves the new slot exists. Every event committed
+        // before it is visible now and the replay lower bound can be resolved.
+        if self.store.resolve_pending_slot_recovery().await? {
+            warn!(
+                "Stream entered failover mode to replay events missed by a lost replication slot"
+            );
+            metrics::record_failover_entered(self.config.id);
+        }
+
         let (status, next_maintenance_at) = self.store.get_stream_state().await?;
 
         // Handle maintenance in background (non-blocking)

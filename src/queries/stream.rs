@@ -7,6 +7,7 @@ pub struct StreamStateRow {
     pub next_maintenance_at: DateTime<Utc>,
     pub failover_checkpoint_id: Option<String>,
     pub failover_checkpoint_ts: Option<DateTime<Utc>>,
+    pub slot_recovery_lsn: Option<String>,
     // Event data from left join
     pub event_id: Option<String>,
     pub event_created_at: Option<DateTime<Utc>>,
@@ -27,6 +28,7 @@ pub async fn fetch_stream_state(
             s.id,
             s.failover_checkpoint_id,
             s.failover_checkpoint_ts,
+            s.slot_recovery_lsn::text as slot_recovery_lsn,
             s.next_maintenance_at,
             e.id::text as event_id,
             e.created_at as event_created_at,
