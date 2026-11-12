@@ -17,7 +17,7 @@ ALTER SYSTEM SET wal_level = logical;
 
 ## Configure
 
-Create `config.yaml`:
+Create `configuration/base.yml`:
 
 ```yaml
 stream:
@@ -32,7 +32,7 @@ stream:
       enabled: false
   batch:
     max_size: 1000
-    max_fill_secs: 5
+    max_fill_ms: 5000
 
 sink:
   type: webhook
@@ -42,7 +42,7 @@ sink:
 ## Run
 
 ```bash
-docker run -v $(pwd)/config.yaml:/config.yaml \
+docker run -v $(pwd)/configuration:/app/configuration \
   ghcr.io/psteinroe/postgres-stream:webhook-latest
 ```
 

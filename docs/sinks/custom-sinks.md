@@ -154,7 +154,7 @@ Build with your sink feature:
 cargo build --release --features sink-http
 ```
 
-Use in `config.yaml`:
+Use in your configuration file (`configuration/base.yml`):
 
 ```yaml
 sink:
