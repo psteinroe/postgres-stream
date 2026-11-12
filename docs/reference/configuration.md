@@ -192,7 +192,7 @@ Make the replication slot a [failover slot](https://www.postgresql.org/docs/curr
 
 When enabled, a new slot is created with `FAILOVER`, and an existing slot is altered to be a failover slot on startup, without resyncing. A slot recreated after [slot loss](../concepts/failover.md#slot-loss) is also a failover slot.
 
-The standbys must synchronize failover slots before they can be used after promotion (`sync_replication_slots = on` and `hot_standby_feedback = on` on the standby, and the standby's physical slot in `synchronized_standby_slots` on the primary). Managed Postgres providers usually expose these as cluster parameters.
+The standbys must synchronize failover slots before they can be used after promotion (`sync_replication_slots = on` and `hot_standby_feedback = on` on the standby, and the standby's physical slot in `synchronized_standby_slots` on the primary). Managed Postgres providers usually expose these as cluster parameters. On startup, the stream logs a warning if `synchronized_standby_slots` is empty on the server, but still starts, since standbys may be managed by the provider. See [Database Failover](../concepts/failover.md#database-failover).
 
 ## Sink Configuration
 

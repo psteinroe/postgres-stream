@@ -169,6 +169,15 @@ pub async fn get_slot_state(pool: &PgPool, slot_name: &str) -> sqlx::Result<Opti
         .await
 }
 
+/// Returns the server's `synchronized_standby_slots` setting.
+///
+/// Returns `None` before Postgres 17, which has no such setting.
+pub async fn get_synchronized_standby_slots(pool: &PgPool) -> sqlx::Result<Option<String>> {
+    sqlx::query_scalar("select current_setting('synchronized_standby_slots', true)")
+        .fetch_one(pool)
+        .await
+}
+
 pub async fn insert_stream_state(
     pool: &PgPool,
     stream_id: i64,

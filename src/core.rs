@@ -2,16 +2,17 @@
 //!
 //! Initializes and manages the lifecycle of the pgstream replication process.
 
-use crate::config::REPLICATION_OPTIONS;
+use crate::config::{REPLICATION_OPTIONS, STATE_MANAGEMENT_OPTIONS};
 use crate::{
     config::{PipelineConfig, SinkConfig},
     migrations::migrate_etl,
+    queries::get_synchronized_standby_slots,
     sink::{AnySink, memory::MemorySink},
     slot_guard::SlotGuardStore,
     slot_recovery::{detect_slot_loss, handle_slot_recovery, record_slot_restart_lsn},
     stream::PgStream,
 };
-use etl::config::{IntoConnectOptions, TlsConfig};
+use etl::config::{IntoConnectOptions, PgConnectionConfig, TlsConfig};
 use etl::destination::PipelineDestination;
 use etl::error::{ErrorKind, EtlResult};
 use etl::pipeline::Pipeline;
@@ -42,6 +43,10 @@ pub async fn start_pipeline_with_config(config: PipelineConfig) -> EtlResult<()>
     // Run etl migrations before starting the pipeline
     migrate_etl(&config.stream.pg_connection).await?;
 
+    if config.stream.failover {
+        warn_if_failover_slot_unprotected(&config.stream.pg_connection).await;
+    }
+
     let pool = PgPoolOptions::new()
         .max_connections(2)
         .connect_with(
@@ -52,7 +57,7 @@ pub async fn start_pipeline_with_config(config: PipelineConfig) -> EtlResult<()>
         )
         .await?;
 
-    // Recovery loop - restarts the pipeline if the slot is lost
+    // Recovery loop - restarts the pipeline after a recoverable failure
     loop {
         recover_lost_slot(&pool, config.stream.id).await?;
 
@@ -304,6 +309,44 @@ fn validate_tls_config(tls: &TlsConfig) -> EtlResult<()> {
     }
 
     Ok(())
+}
+
+/// Warns when the primary does not wait for any standby to sync the failover slot.
+///
+/// A failover slot is only usable after a promotion if the promoted standby synced it, and
+/// `synchronized_standby_slots` makes the primary wait for those standbys before sending changes.
+/// Standbys are often configured by the provider, so a misconfiguration only warns. Before
+/// Postgres 17 there is no such setting and etl rejects failover slots on startup.
+async fn warn_if_failover_slot_unprotected(pg_connection: &PgConnectionConfig) {
+    let result = async {
+        let pool = PgPoolOptions::new()
+            .max_connections(1)
+            .connect_with(pg_connection.with_db(Some(&STATE_MANAGEMENT_OPTIONS)))
+            .await?;
+        let slots = get_synchronized_standby_slots(&pool).await;
+        pool.close().await;
+        slots
+    }
+    .await;
+
+    match result {
+        Ok(Some(slots)) if slots.trim().is_empty() => warn!(
+            "stream.failover is enabled but synchronized_standby_slots is empty: no standby is \
+             guaranteed to have synced the replication slot, so it may be missing or behind on a \
+             promoted standby. List the standbys' physical slots in synchronized_standby_slots \
+             and enable sync_replication_slots and hot_standby_feedback on the standbys"
+        ),
+        Ok(Some(slots)) => info!(
+            synchronized_standby_slots = %slots,
+            "primary waits for standby slots before sending changes of the failover slot"
+        ),
+        Ok(None) => {}
+        Err(err) => warn!(
+            error = %err,
+            "failed to read synchronized_standby_slots, cannot check whether the failover slot \
+             survives a failover"
+        ),
+    }
 }
 
 /// Logs an allowlist of safe operational configuration fields.
