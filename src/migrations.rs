@@ -103,3 +103,120 @@ pub async fn migrate_pgstream_from_url(database_url: &str) -> Result<(), sqlx::E
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    /// The migration that added `pgstream.emit_events_schema_change()`. Older migrations ran
+    /// before etl tracked the events table schema and are exempt.
+    const EMIT_SCHEMA_CHANGE_VERSION: u64 = 1_794_600_000_002;
+
+    const EMIT_SCHEMA_CHANGE_CALL: &str = "pgstream.emit_events_schema_change()";
+
+    /// Lowercases `sql`, strips line comments and quotes and collapses whitespace.
+    fn normalize(sql: &str) -> String {
+        sql.lines()
+            .map(|line| line.split("--").next().unwrap_or_default())
+            .collect::<Vec<_>>()
+            .join(" ")
+            .to_lowercase()
+            .replace('"', "")
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+
+    /// Returns the byte offset of the last `alter table pgstream.events` in normalized `sql`.
+    fn last_events_alter(sql: &str) -> Option<usize> {
+        let mut last = None;
+        for (offset, _) in sql.match_indices("alter table ") {
+            let mut tokens = sql[offset + "alter table ".len()..].split(' ').peekable();
+            if tokens.peek() == Some(&"if") {
+                tokens.next();
+                tokens.next();
+            }
+            if tokens.peek() == Some(&"only") {
+                tokens.next();
+            }
+            let table = tokens.next().unwrap_or_default();
+            if table.trim_end_matches(';') == "pgstream.events" {
+                last = Some(offset);
+            }
+        }
+        last
+    }
+
+    /// Returns why `sql` does not announce its schema change of `pgstream.events`, if it alters
+    /// the table.
+    fn schema_change_violation(sql: &str) -> Option<&'static str> {
+        if sql.trim_start().starts_with("-- no-transaction") {
+            return last_events_alter(&normalize(sql)).map(
+                |_| "must run in a transaction so the schema change message is transactional",
+            );
+        }
+
+        let sql = normalize(sql);
+        let alter = last_events_alter(&sql)?;
+        match sql.rfind(EMIT_SCHEMA_CHANGE_CALL) {
+            Some(call) if call > alter => None,
+            _ => Some("must call pgstream.emit_events_schema_change() after altering the table"),
+        }
+    }
+
+    #[test]
+    fn migrations_altering_events_announce_the_schema_change() {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("migrations");
+
+        for entry in std::fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.extension().is_none_or(|extension| extension != "sql") {
+                continue;
+            }
+            let file_name = path.file_name().unwrap().to_string_lossy().into_owned();
+            let version: u64 = file_name
+                .split('_')
+                .next()
+                .and_then(|version| version.parse().ok())
+                .unwrap_or_else(|| panic!("migration {file_name} has no version prefix"));
+            if version <= EMIT_SCHEMA_CHANGE_VERSION {
+                continue;
+            }
+
+            let sql = std::fs::read_to_string(&path).unwrap();
+            if let Some(violation) = schema_change_violation(&sql) {
+                panic!(
+                    "migration {file_name} alters pgstream.events and {violation}; see \
+                     migrations/README.md"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn schema_change_violation_detects_unannounced_alters() {
+        let announced = "alter table pgstream.events add column foo text;\n\
+                         select pgstream.emit_events_schema_change();";
+        assert_eq!(schema_change_violation(announced), None);
+
+        let quoted = "ALTER TABLE IF EXISTS ONLY \"pgstream\".\"events\"\n  DROP COLUMN foo;";
+        assert!(schema_change_violation(quoted).is_some());
+
+        let call_before_alter = "select pgstream.emit_events_schema_change();\n\
+                                 alter table pgstream.events add column foo text;";
+        assert!(schema_change_violation(call_before_alter).is_some());
+
+        let commented_call = "alter table pgstream.events add column foo text;\n\
+                              -- select pgstream.emit_events_schema_change();";
+        assert!(schema_change_violation(commented_call).is_some());
+
+        let no_transaction = "-- no-transaction\n\
+                              alter table pgstream.events add column foo text;\n\
+                              select pgstream.emit_events_schema_change();";
+        assert!(schema_change_violation(no_transaction).is_some());
+
+        let other_table = "alter table pgstream.events_20240101 add column foo text;\n\
+                           alter table pgstream.streams add column foo text;";
+        assert_eq!(schema_change_violation(other_table), None);
+    }
+}

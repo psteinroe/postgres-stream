@@ -87,8 +87,7 @@ where
     /// Converts replicated events and publishes them to the sink in batches of at most
     /// `batch.max_size` events.
     async fn write_events_inline(&self, events: Vec<Event>) -> EtlResult<()> {
-        let schema = self.store.get_events_table_schema().await?;
-        let mut stream_events = convert_stream_events_from_events(events, &schema.column_schemas)?;
+        let mut stream_events = convert_stream_events_from_events(events)?;
 
         let max_size = self.config.batch.max_size.max(1);
         while !stream_events.is_empty() {

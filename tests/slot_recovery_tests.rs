@@ -824,7 +824,7 @@ async fn test_slot_recovery_preserves_existing_failover_checkpoint() {
 
     let lsn_checkpoint: Option<(String, chrono::DateTime<chrono::Utc>)> = sqlx::query_as(
         "SELECT id::text, created_at FROM pgstream.events
-         WHERE lsn > $1::pg_lsn AND stream_id = $2
+         WHERE lsn >= $1::pg_lsn AND stream_id = $2
          ORDER BY created_at, id LIMIT 1",
     )
     .bind(&confirmed_lsn)
