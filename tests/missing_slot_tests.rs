@@ -412,3 +412,58 @@ async fn test_slot_recovery_replays_transactions_committed_after_the_confirmed_p
     }
     stop_pipeline(pipeline).await;
 }
+
+/// Events committed before the new slot existed are replayed even if they sort after the first
+/// event the new slot delivers.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_slot_recovery_replays_events_sorted_after_the_first_new_event() {
+    let _lock = acquire_shared_test_lock().await;
+    let db = TestDatabase::spawn().await;
+    db.ensure_today_partition().await;
+    let stream_config = test_stream_config_with_id(&db, unique_pipeline_id());
+    let stream_id = stream_config.id;
+    let sink = MemorySink::new();
+
+    let pipeline = run_until_delivered(&db, &stream_config, &sink, json!({"before": true})).await;
+    record_slot_restart_lsn(&db.pool, stream_id).await.unwrap();
+    stop_pipeline(pipeline).await;
+
+    let while_down_created_at: chrono::DateTime<chrono::Utc> = sqlx::query_scalar(
+        "insert into pgstream.events (payload, stream_id) values ($1, $2) returning created_at",
+    )
+    .bind(json!({"while_down": true}))
+    .bind(stream_id as i64)
+    .fetch_one(&db.pool)
+    .await
+    .unwrap();
+    drop_slot(&db.pool, stream_id).await;
+    recover_lost_slot(&db.pool, stream_id)
+        .await
+        .expect("Recovery should succeed");
+
+    let pipeline = start_pipeline(&db, &stream_config, &sink).await;
+    wait_for("initial sync of the new slot", || {
+        tables_synced(&db.pool, stream_id)
+    })
+    .await;
+
+    // The first event of the new slot sorts before `while_down`, e.g. a backdated event.
+    sqlx::query("insert into pgstream.events (payload, stream_id, created_at) values ($1, $2, $3)")
+        .bind(json!({"after": true}))
+        .bind(stream_id as i64)
+        .bind(while_down_created_at - chrono::Duration::milliseconds(1))
+        .execute(&db.pool)
+        .await
+        .unwrap();
+
+    wait_for("delivery after recovery", || {
+        delivered(&sink, json!({"after": true}))
+    })
+    .await;
+    wait_for(
+        "replay of the event written while the slot was missing",
+        || delivered(&sink, json!({"while_down": true})),
+    )
+    .await;
+    stop_pipeline(pipeline).await;
+}

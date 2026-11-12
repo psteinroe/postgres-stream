@@ -158,6 +158,7 @@ async fn test_get_events_stream_empty_range() {
         .get_events_stream(
             events.first().expect("Should have event 0"),
             events.first().expect("Should have event 0"),
+            None,
         )
         .await
         .expect("Failed to get events stream");
@@ -197,6 +198,7 @@ async fn test_get_events_stream_with_events() {
         .get_events_stream(
             events.first().expect("Should have event 0"),
             events.get(4).expect("Should have event 4"),
+            None,
         )
         .await
         .expect("Failed to get events stream");
@@ -246,6 +248,7 @@ async fn test_get_events_stream_boundary_conditions() {
         .get_events_stream(
             events.first().expect("Should have event 0"),
             events.get(1).expect("Should have event 1"),
+            None,
         )
         .await
         .expect("Failed to get events stream");
@@ -263,6 +266,7 @@ async fn test_get_events_stream_boundary_conditions() {
         .get_events_stream(
             events.get(4).expect("Should have event 4"),
             events.get(9).expect("Should have event 9"),
+            None,
         )
         .await
         .expect("Failed to get events stream");
@@ -274,6 +278,52 @@ async fn test_get_events_stream_boundary_conditions() {
         count += 1;
     }
     assert_eq!(count, 4, "Should have 4 events between indices 4 and 9");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_get_events_stream_includes_window_end() {
+    use futures::StreamExt;
+    use tokio::pin;
+
+    let db = TestDatabase::spawn().await;
+    db.ensure_today_partition().await;
+
+    let client = ReplayClient::connect(1, db.config.clone())
+        .await
+        .expect("Failed to connect");
+
+    let events = insert_events_to_db(&db, 6).await;
+    let event = |i: usize| events.get(i).expect("Should have event");
+
+    // A window end after the current batch extends the range up to it, inclusive.
+    let stream = client
+        .get_events_stream(event(0), event(2), Some(event(4)))
+        .await
+        .expect("Failed to get events stream");
+    pin!(stream);
+    let mut replayed = Vec::new();
+    while let Some(result) = stream.next().await {
+        replayed.push(result.expect("Should parse row").id);
+    }
+    assert_eq!(
+        replayed,
+        (1..=4).map(|i| event(i).clone()).collect::<Vec<_>>()
+    );
+
+    // A window end before the current batch does not shorten the range.
+    let stream = client
+        .get_events_stream(event(0), event(4), Some(event(1)))
+        .await
+        .expect("Failed to get events stream");
+    pin!(stream);
+    let mut replayed = Vec::new();
+    while let Some(result) = stream.next().await {
+        replayed.push(result.expect("Should parse row").id);
+    }
+    assert_eq!(
+        replayed,
+        (1..4).map(|i| event(i).clone()).collect::<Vec<_>>()
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -302,6 +352,7 @@ async fn test_update_checkpoint_while_events_stream_active() {
         .get_events_stream(
             events.first().expect("Should have event 0"),
             events.get(249).expect("Should have event 249"),
+            None,
         )
         .await
         .expect("Failed to get events stream");
@@ -391,6 +442,7 @@ async fn test_get_events_stream_filters_by_stream_id() {
         .get_events_stream(
             events_stream_1.first().expect("Should have event 0"),
             events_stream_1.get(2).expect("Should have event 2"),
+            None,
         )
         .await
         .expect("Failed to get events stream");
@@ -434,6 +486,7 @@ async fn test_connection_survives_multiple_operations() {
             .get_events_stream(
                 events.get(i).expect("Should have event"),
                 events.get(i + 1).expect("Should have next event"),
+                None,
             )
             .await
             .unwrap();

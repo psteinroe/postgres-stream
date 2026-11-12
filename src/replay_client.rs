@@ -160,35 +160,44 @@ impl ReplayClient {
         self.copy_client.is_closed() || self.checkpoint_client.is_closed()
     }
 
-    /// Streams events between two checkpoints (exclusive on both ends), ordered by
-    /// `(created_at, id)`.
+    /// Streams the events after `from` (exclusive) that are before `to` (exclusive) or not after
+    /// `window_end` (inclusive), ordered by `(created_at, id)`.
     ///
     /// Rows are read lazily from the server as the stream is polled.
     pub async fn get_events_stream(
         &self,
         from: &EventIdentifier,
         to: &EventIdentifier,
+        window_end: Option<&EventIdentifier>,
     ) -> EtlResult<impl Stream<Item = EtlResult<TriggeredEvent>> + use<>> {
+        // The union of both ranges is a single range ending at the later bound.
+        let (upper, upper_op) = match window_end {
+            Some(end) if end.cmp_replay_order(to).is_ge() => (end, "<="),
+            _ => (to, "<"),
+        };
+
         let stream_id = self.stream_id as i64;
         let params: [&(dyn ToSql + Sync); 5] = [
             &from.created_at,
             &from.id,
-            &to.created_at,
-            &to.id,
+            &upper.created_at,
+            &upper.id,
             &stream_id,
         ];
 
         let rows = self
             .copy_client
             .query_raw(
-                r#"
+                &format!(
+                    r#"
                   select id, payload, metadata, stream_id, created_at, lsn
                   from pgstream.events
                   where (created_at, id) > ($1::timestamptz, $2::text::uuid)
-                    and (created_at, id) < ($3::timestamptz, $4::text::uuid)
+                    and (created_at, id) {upper_op} ($3::timestamptz, $4::text::uuid)
                     and stream_id = $5
                   order by created_at, id
-                "#,
+                "#
+                ),
                 params,
             )
             .await?;

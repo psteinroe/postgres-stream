@@ -8,6 +8,8 @@ pub struct StreamStateRow {
     pub failover_checkpoint_id: Option<String>,
     pub failover_checkpoint_ts: Option<DateTime<Utc>>,
     pub slot_recovery_lsn: Option<String>,
+    pub failover_window_end_id: Option<String>,
+    pub failover_window_end_ts: Option<DateTime<Utc>>,
     // Event data from left join
     pub event_id: Option<String>,
     pub event_created_at: Option<DateTime<Utc>>,
@@ -29,6 +31,8 @@ pub async fn fetch_stream_state(
             s.failover_checkpoint_id,
             s.failover_checkpoint_ts,
             s.slot_recovery_lsn::text as slot_recovery_lsn,
+            s.failover_window_end_id,
+            s.failover_window_end_ts,
             s.next_maintenance_at,
             e.id::text as event_id,
             e.created_at as event_created_at,
@@ -48,25 +52,34 @@ pub async fn fetch_stream_state(
     .await
 }
 
-/// Upserts stream status (failover checkpoint).
+/// Upserts stream status (failover checkpoint and replay window end).
 pub async fn upsert_stream_status(
     pool: &PgPool,
     stream_id: i64,
     failover_checkpoint_id: Option<String>,
     failover_checkpoint_ts: Option<DateTime<Utc>>,
+    failover_window_end_id: Option<String>,
+    failover_window_end_ts: Option<DateTime<Utc>>,
 ) -> sqlx::Result<()> {
     sqlx::query(
         r#"
-          insert into pgstream.streams (id, failover_checkpoint_id, failover_checkpoint_ts)
-          values ($1, $2, $3)
+          insert into pgstream.streams (
+            id, failover_checkpoint_id, failover_checkpoint_ts,
+            failover_window_end_id, failover_window_end_ts
+          )
+          values ($1, $2, $3, $4, $5)
           on conflict (id) do update
             set failover_checkpoint_id = $2,
-                failover_checkpoint_ts = $3
+                failover_checkpoint_ts = $3,
+                failover_window_end_id = $4,
+                failover_window_end_ts = $5
           "#,
     )
     .bind(stream_id)
     .bind(failover_checkpoint_id)
     .bind(failover_checkpoint_ts)
+    .bind(failover_window_end_id)
+    .bind(failover_window_end_ts)
     .execute(pool)
     .await?;
     Ok(())

@@ -28,6 +28,14 @@ impl EventIdentifier {
     pub fn primary_keys(&self) -> (String, chrono::DateTime<chrono::Utc>) {
         (self.id.clone(), self.created_at)
     }
+
+    /// Compares by `(created_at, id)`, the order of the events table and of failover replay.
+    #[must_use]
+    pub fn cmp_replay_order(&self, other: &Self) -> std::cmp::Ordering {
+        self.created_at
+            .cmp(&other.created_at)
+            .then_with(|| self.id.cmp(&other.id))
+    }
 }
 
 impl PartialOrd for EventIdentifier {

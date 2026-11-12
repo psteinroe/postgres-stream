@@ -43,6 +43,13 @@
 //! decode transactions that commit while it is created. The bound is therefore stored in
 //! `pgstream.streams.slot_recovery_lsn` and resolved again once the new slot delivers its first
 //! batch, when all of them are visible.
+//!
+//! # Replay upper bound
+//!
+//! Every event the new slot does not deliver committed before the slot existed, so its
+//! `created_at` is earlier than the time the first batch arrives. [`resolve_slot_recovery`] sets
+//! the end of the failover replay window to that time plus [`RECOVERY_WINDOW_CLOCK_ALLOWANCE`].
+//! This assumes `created_at` is not set ahead of the database clock by more than the allowance.
 
 use chrono::{DateTime, Utc};
 use etl::error::{ErrorKind, EtlResult};
@@ -51,9 +58,16 @@ use sqlx::{PgExecutor, PgPool};
 use tracing::{info, warn};
 
 use crate::queries::get_slot_state;
-use crate::types::{PgLsn, SlotName};
+use crate::types::{EventIdentifier, PgLsn, SlotName};
 
 type Checkpoint = (String, DateTime<Utc>);
+
+/// Allowance for clock differences between the database hosts that set an event's `created_at`
+/// and the one that resolves the recovery window, e.g. before and after a database failover.
+pub const RECOVERY_WINDOW_CLOCK_ALLOWANCE: chrono::Duration = chrono::Duration::minutes(1);
+
+/// The largest event id, to end a window at a timestamp inclusively.
+const MAX_EVENT_ID: &str = "ffffffff-ffff-ffff-ffff-ffffffffffff";
 
 #[must_use]
 fn checkpoint_is_earlier(a: &Checkpoint, b: &Checkpoint) -> bool {
@@ -152,6 +166,8 @@ fn parse_lsn(lsn: &str) -> EtlResult<PgLsn> {
 struct RecoveryState {
     failover_checkpoint_id: Option<String>,
     failover_checkpoint_ts: Option<DateTime<Utc>>,
+    failover_window_end_id: Option<String>,
+    failover_window_end_ts: Option<DateTime<Utc>>,
     slot_restart_lsn: Option<String>,
     slot_recovery_lsn: Option<String>,
 }
@@ -163,6 +179,7 @@ async fn fetch_recovery_state<'c, E: PgExecutor<'c>>(
 ) -> EtlResult<Option<RecoveryState>> {
     let row = sqlx::query_as(
         "SELECT failover_checkpoint_id, failover_checkpoint_ts,
+                failover_window_end_id, failover_window_end_ts,
                 slot_restart_lsn::text AS slot_restart_lsn,
                 slot_recovery_lsn::text AS slot_recovery_lsn
          FROM pgstream.streams WHERE id = $1 FOR UPDATE",
@@ -449,19 +466,36 @@ pub async fn handle_slot_recovery(pool: &PgPool, stream_id: u64) -> EtlResult<()
     Ok(())
 }
 
-/// Turns the replay lower bound left by [`handle_slot_recovery`] into a failover checkpoint.
+/// Failover replay window set up by [`resolve_slot_recovery`].
+#[derive(Debug, Clone)]
+pub struct FailoverWindow {
+    /// The failover checkpoint, replayed first.
+    pub start: EventIdentifier,
+    /// Inclusive end of the events that must be replayed.
+    pub end: EventIdentifier,
+}
+
+/// Turns the replay lower bound left by [`handle_slot_recovery`] into a failover replay window.
 ///
 /// Called with the first batch of the new slot. By then every transaction that committed before
 /// the new slot was created is visible, including those that were still running during recovery.
 /// Sets the failover checkpoint to the earlier of the existing checkpoint and the first event at
-/// or past the bound, clears the bound and returns the checkpoint.
-pub async fn resolve_slot_recovery(pool: &PgPool, stream_id: u64) -> EtlResult<Option<Checkpoint>> {
+/// or past the bound, and the window end to the current database time plus
+/// [`RECOVERY_WINDOW_CLOCK_ALLOWANCE`]: events the new slot does not deliver committed before it
+/// existed, so their `created_at` is earlier. Clears the bound and returns the window, if any
+/// event has to be replayed.
+pub async fn resolve_slot_recovery(
+    pool: &PgPool,
+    stream_id: u64,
+) -> EtlResult<Option<FailoverWindow>> {
     let mut tx = pool.begin().await?;
 
     let row = fetch_recovery_state(&mut *tx, stream_id).await?;
     let Some(RecoveryState {
         failover_checkpoint_id,
         failover_checkpoint_ts,
+        failover_window_end_id,
+        failover_window_end_ts,
         slot_recovery_lsn: Some(recovery_lsn),
         ..
     }) = row
@@ -475,15 +509,43 @@ pub async fn resolve_slot_recovery(pool: &PgPool, stream_id: u64) -> EtlResult<O
         first_event_at_or_after(&mut *tx, stream_id, parse_lsn(&recovery_lsn)?).await?;
     let checkpoint = select_recovery_checkpoint(existing_checkpoint, lsn_checkpoint);
 
-    let (checkpoint_id, checkpoint_ts) = checkpoint.clone().unzip();
+    let window = match checkpoint {
+        Some((id, created_at)) => {
+            let now: DateTime<Utc> = sqlx::query_scalar("SELECT clock_timestamp()")
+                .fetch_one(&mut *tx)
+                .await?;
+            let recovery_end = EventIdentifier::new(
+                MAX_EVENT_ID.to_owned(),
+                now + RECOVERY_WINDOW_CLOCK_ALLOWANCE,
+            );
+            let end = match failover_window_end_id.zip(failover_window_end_ts) {
+                Some((id, created_at)) => std::cmp::max_by(
+                    EventIdentifier::new(id, created_at),
+                    recovery_end,
+                    |a, b| a.cmp_replay_order(b),
+                ),
+                None => recovery_end,
+            };
+            Some(FailoverWindow {
+                start: EventIdentifier::new(id, created_at),
+                end,
+            })
+        }
+        None => None,
+    };
+
     sqlx::query(
         "UPDATE pgstream.streams
-         SET failover_checkpoint_id = $2, failover_checkpoint_ts = $3, slot_recovery_lsn = NULL
+         SET failover_checkpoint_id = $2, failover_checkpoint_ts = $3,
+             failover_window_end_id = $4, failover_window_end_ts = $5,
+             slot_recovery_lsn = NULL
          WHERE id = $1",
     )
     .bind(stream_id as i64)
-    .bind(checkpoint_id)
-    .bind(checkpoint_ts)
+    .bind(window.as_ref().map(|w| w.start.id.clone()))
+    .bind(window.as_ref().map(|w| w.start.created_at))
+    .bind(window.as_ref().map(|w| w.end.id.clone()))
+    .bind(window.as_ref().map(|w| w.end.created_at))
     .execute(&mut *tx)
     .await?;
 
@@ -491,11 +553,11 @@ pub async fn resolve_slot_recovery(pool: &PgPool, stream_id: u64) -> EtlResult<O
 
     info!(
         recovery_lsn = %recovery_lsn,
-        checkpoint = ?checkpoint,
-        "resolved slot recovery lower bound"
+        window = ?window,
+        "resolved slot recovery replay window"
     );
 
-    Ok(checkpoint)
+    Ok(window)
 }
 
 #[cfg(test)]

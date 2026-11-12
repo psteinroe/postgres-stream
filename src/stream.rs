@@ -22,7 +22,7 @@ use crate::{
     migrations::migrate_pgstream,
     replay_client::ReplayClient,
     sink::Sink as SinkTrait,
-    store::StreamStore,
+    store::{StreamStore, replay_bounds},
     types::{EventIdentifier, StreamStatus, TriggeredEvent, convert_stream_events_from_events},
     utils::task::TaskHandle,
 };
@@ -110,6 +110,9 @@ where
     /// - publish the events to the sink
     /// - enter failover if publishing fails
     ///
+    /// A batch that fails to publish or is dropped during failover extends the persisted failover
+    /// replay window before this returns, so its events are replayed on recovery.
+    ///
     /// * `events`: Batch of stream events to process.
     async fn tick(&self, events: Vec<TriggeredEvent>) -> EtlResult<()> {
         // After slot recovery, the first batch proves the new slot exists. Every event committed
@@ -121,6 +124,9 @@ where
             metrics::record_failover_entered(self.config.id);
         }
 
+        let Some(bounds) = replay_bounds(&events) else {
+            return Ok(());
+        };
         let (status, next_maintenance_at) = self.store.get_stream_state().await?;
 
         // Handle maintenance in background (non-blocking)
@@ -137,50 +143,40 @@ where
                 current_batch_event_id = %current_batch_event_id.id,
                 "Stream is in failover mode; attempting recovery before publishing current batch"
             );
+            let window_end = self.store.get_failover_window_end().await;
             let recovered = self
-                .handle_failover(&checkpoint_event_id, &current_batch_event_id)
+                .handle_failover(
+                    &checkpoint_event_id,
+                    &current_batch_event_id,
+                    window_end.as_ref(),
+                )
                 .await?;
             if !recovered {
+                // The batch is dropped and reported as written, so the replay window must cover
+                // it before this returns.
+                self.store.extend_failover_window(&bounds).await?;
                 return Ok(());
             }
         }
 
         // Publish events
-        let checkpoint_id = match events.first() {
-            Some(event) => event.id.clone(),
-            None => return Ok(()),
-        };
-
         let last_event_timestamp = events.last().map(|e| e.id.created_at);
         let event_count = events.len();
 
         let result = self.sink.publish_events(events).await;
         if let Err(err) = result {
-            let (current_status, _) = self.store.get_stream_state().await?;
-
-            match current_status {
-                StreamStatus::Healthy => {
-                    warn!(
-                        checkpoint_event_id = %checkpoint_id.id,
-                        error = %err,
-                        "Publishing events failed, entering failover"
-                    );
-                    metrics::record_failover_entered(self.config.id);
-                    self.store
-                        .store_stream_status(StreamStatus::Failover {
-                            checkpoint_event_id: checkpoint_id,
-                        })
-                        .await?;
-                }
-                StreamStatus::Failover {
-                    checkpoint_event_id,
-                } => {
-                    warn!(
-                        checkpoint_event_id = %checkpoint_event_id.id,
-                        error = %err,
-                        "Publishing events failed while already in failover, preserving checkpoint event id"
-                    );
-                }
+            if self.store.extend_failover_window(&bounds).await? {
+                warn!(
+                    checkpoint_event_id = %bounds.0.id,
+                    error = %err,
+                    "Publishing events failed, entering failover"
+                );
+                metrics::record_failover_entered(self.config.id);
+            } else {
+                warn!(
+                    error = %err,
+                    "Publishing events failed while already in failover, extending the replay window"
+                );
             }
 
             return Ok(());
@@ -245,10 +241,16 @@ where
         Ok(())
     }
 
+    /// Replays the failover window, then makes the stream healthy.
+    ///
+    /// Publishes the checkpoint event, then every event after it up to the later of
+    /// `window_end` (inclusive) and the current batch's first event (exclusive). Returns
+    /// whether the sink accepted all of them.
     async fn handle_failover(
         &self,
         checkpoint_event_id: &EventIdentifier,
         current_batch_event_id: &EventIdentifier,
+        window_end: Option<&EventIdentifier>,
     ) -> EtlResult<bool> {
         let checkpoint_event = self.store.get_checkpoint_event(checkpoint_event_id).await?;
 
@@ -278,7 +280,7 @@ where
             ReplayClient::connect(self.config.id, self.config.pg_connection.clone()).await?;
 
         let replay_stream = replay_client
-            .get_events_stream(&checkpoint_event.id, current_batch_event_id)
+            .get_events_stream(&checkpoint_event.id, current_batch_event_id, window_end)
             .await?;
         let replay_stream = TimeoutBatchStream::wrap(replay_stream, self.config.batch.clone());
         pin!(replay_stream);
