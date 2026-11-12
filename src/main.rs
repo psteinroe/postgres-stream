@@ -2,6 +2,7 @@ use crate::error::{PgStreamError, PgStreamResult};
 use postgres_stream::config::{PipelineConfig, load_config};
 use postgres_stream::core::start_pipeline_with_config;
 use postgres_stream::metrics::init_metrics;
+use postgres_stream::utils::crypto::init_crypto_provider;
 use std::process::ExitCode;
 use tracing_subscriber::{EnvFilter, fmt};
 
@@ -55,6 +56,7 @@ fn main() -> ExitCode {
 /// Runs the daemon and propagates typed startup errors.
 fn try_main() -> PgStreamResult<()> {
     init_tracing();
+    init_crypto_provider();
 
     let config = load_pipeline_config()?;
     init_metrics().map_err(PgStreamError::config)?;

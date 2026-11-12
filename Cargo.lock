@@ -3930,7 +3930,6 @@ dependencies = [
  "aws-sdk-sqs",
  "chrono",
  "config",
- "const-oid 0.9.6",
  "ctor",
  "elasticsearch",
  "etl",
@@ -3947,7 +3946,6 @@ dependencies = [
  "rdkafka",
  "redis",
  "reqwest",
- "ring",
  "rustls 0.23.46",
  "rustls-pemfile",
  "secrecy",
@@ -3970,7 +3968,6 @@ dependencies = [
  "url",
  "uuid",
  "wiremock",
- "x509-cert",
 ]
 
 [[package]]

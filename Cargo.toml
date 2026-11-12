@@ -23,13 +23,11 @@ test-utils         = ["dep:ctor", "dep:testcontainers", "dep:testcontainers-modu
 anyhow = { version = "1.0.98", default-features = false, features = ["std"] }
 chrono = { version = "0.4.41", default-features = false }
 config = { version = "0.14", default-features = false, features = ["yaml", "json"] }
-const-oid = { version = "0.9.6", default-features = false }
 futures = { version = "0.3.31", default-features = false }
 metrics = { version = "0.24.2", default-features = false }
 metrics-exporter-prometheus = { version = "0.17.2", default-features = false, features = ["http-listener"] }
 pin-project-lite = { version = "0.2.16", default-features = false }
-ring = { version = "0.17.14", default-features = false }
-rustls = { version = "0.23.31", default-features = false }
+rustls = { version = "0.23.31", default-features = false, features = ["aws-lc-rs"] }
 rustls-pemfile = { version = "2.2.0", default-features = false, features = ["std"] }
 secrecy = { version = "0.10.3", default-features = false, features = ["serde"] }
 serde = { version = "1.0.219", default-features = false, features = ["std", "derive"] }
@@ -53,11 +51,12 @@ tokio-postgres = { git = "https://github.com/supabase/rust-postgres", default-fe
 tokio-rustls = { version = "0.26.2", default-features = false }
 tracing = { version = "0.1.41", default-features = false }
 tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "env-filter"] }
-x509-cert = { version = "0.2.2", default-features = false }
 
-etl          = { git = "https://github.com/supabase/etl", rev = "d5098c2774fabfb5b9e3a15930ea90ec5e9c042f" }
-etl-postgres = { git = "https://github.com/supabase/etl", rev = "d5098c2774fabfb5b9e3a15930ea90ec5e9c042f" }
-uuid         = { version = "1.19.0", default-features = false, features = ["v4"] }
+etl = { git = "https://github.com/supabase/etl", rev = "d5098c2774fabfb5b9e3a15930ea90ec5e9c042f" }
+etl-postgres = { git = "https://github.com/supabase/etl", rev = "d5098c2774fabfb5b9e3a15930ea90ec5e9c042f", features = [
+  "tokio",
+] }
+uuid = { version = "1.19.0", default-features = false, features = ["v4"] }
 
 # Optional sink dependencies.
 async-nats = { version = "0.38", optional = true }

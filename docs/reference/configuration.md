@@ -100,16 +100,27 @@ Database password. Supports environment variable substitution: `${ENV_VAR}`.
 | Required | No |
 | Default | false |
 
-Enable TLS for database connection.
+Enable TLS for all database connections: replication, state, and failover replay. The server certificate and host name are verified against [`tls.trusted_root_certs`](#tlstrusted_root_certs). Replication and failover replay connections use SCRAM channel binding when the server offers it.
 
 #### `tls.trusted_root_certs`
 
 | | |
 |--|--|
 | Type | string |
-| Required | No |
+| Required | When `tls.enabled` is true |
 
-Path to CA certificate file for TLS verification.
+PEM-encoded CA certificates that sign the server certificate. This is the certificate content, not a path to a file. Startup fails with a configuration error if it is blank while `tls.enabled` is true.
+
+```yaml
+stream:
+  pg_connection:
+    tls:
+      enabled: true
+      trusted_root_certs: |
+        -----BEGIN CERTIFICATE-----
+        ...
+        -----END CERTIFICATE-----
+```
 
 #### `keepalive`
 

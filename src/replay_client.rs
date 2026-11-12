@@ -6,6 +6,7 @@ use chrono::{DateTime, Utc};
 use etl::config::{IntoConnectOptions, PgConnectionConfig};
 use etl::error::EtlResult;
 use etl_postgres::source::extract_server_version;
+use etl_postgres::tokio::tls::MakeRustlsConnect;
 use futures::{Stream, StreamExt};
 use tokio_postgres::tls::MakeTlsConnect;
 use tokio_postgres::types::ToSql;
@@ -15,7 +16,6 @@ use tracing::{Instrument, error, info};
 
 use crate::config::{REPLICATION_OPTIONS, STATE_MANAGEMENT_OPTIONS};
 use crate::types::{EventIdentifier, StreamId, TriggeredEvent};
-use crate::utils::tokio::MakeRustlsConnect;
 
 /// Spawns a background task to monitor a Postgres connection until it terminates.
 fn spawn_postgres_connection<T>(connection: Connection<Socket, T::Stream>)
