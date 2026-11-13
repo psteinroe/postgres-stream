@@ -1,14 +1,13 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use etl::destination::Destination;
 use etl::error::{ErrorKind, EtlResult};
-use etl::store::both::postgres::PostgresStore;
+use etl::store::PostgresStore;
 use postgres_stream::sink::Sink;
 use postgres_stream::stream::PgStream;
 use postgres_stream::test_utils::{
     TestDatabase, create_postgres_store_with_table_id, insert_events_to_db, make_event_with_id,
-    test_stream_config,
+    test_stream_config, write_events,
 };
 use postgres_stream::types::{StreamStatus, TriggeredEvent};
 
@@ -69,25 +68,29 @@ async fn test_failover_does_not_overwrite_checkpoint_on_repeated_failures() {
     let event_ids = insert_events_to_db(&db, 3).await;
 
     // First write fails and enters failover at event 0.
-    stream
-        .write_events(vec![make_event_with_id(
+    write_events(
+        &stream,
+        vec![make_event_with_id(
             table_id,
             event_ids.first().expect("Should have event 0"),
             serde_json::json!({"seq": 1}),
-        )])
-        .await
-        .expect("write_events should succeed even if sink fails");
+        )],
+    )
+    .await
+    .expect("write_events should succeed even if sink fails");
 
     // During failover, both checkpoint re-publish and current event publish fail.
     // The checkpoint should remain at event 0 instead of being overwritten.
-    stream
-        .write_events(vec![make_event_with_id(
+    write_events(
+        &stream,
+        vec![make_event_with_id(
             table_id,
             event_ids.get(2).expect("Should have event 2"),
             serde_json::json!({"seq": 3}),
-        )])
-        .await
-        .expect("write_events should succeed even if sink fails");
+        )],
+    )
+    .await
+    .expect("write_events should succeed even if sink fails");
 
     let (status, _) = stream.store().get_stream_state().await.unwrap();
 

@@ -17,33 +17,32 @@ sink-redis-strings = ["dep:redis"]
 sink-sns           = ["dep:aws-sdk-sns", "dep:aws-config"]
 sink-sqs           = ["dep:aws-sdk-sqs", "dep:aws-config"]
 sink-webhook       = ["dep:reqwest"]
-test-utils         = ["dep:ctor", "dep:testcontainers", "dep:testcontainers-modules"]
+test-utils         = ["dep:ctor", "dep:testcontainers", "dep:testcontainers-modules", "etl/test-utils"]
 
 [dependencies]
 anyhow = { version = "1.0.98", default-features = false, features = ["std"] }
 chrono = { version = "0.4.41", default-features = false }
 config = { version = "0.14", default-features = false, features = ["yaml", "json"] }
-const-oid = { version = "0.9.6", default-features = false }
 futures = { version = "0.3.31", default-features = false }
 metrics = { version = "0.24.2", default-features = false }
 metrics-exporter-prometheus = { version = "0.17.2", default-features = false, features = ["http-listener"] }
 pin-project-lite = { version = "0.2.16", default-features = false }
-ring = { version = "0.17.14", default-features = false }
-rustls = { version = "0.23.31", default-features = false }
+rustls = { version = "0.23.31", default-features = false, features = ["aws-lc-rs"] }
 rustls-pemfile = { version = "2.2.0", default-features = false, features = ["std"] }
 secrecy = { version = "0.10.3", default-features = false, features = ["serde"] }
 serde = { version = "1.0.219", default-features = false, features = ["std", "derive"] }
 serde_json = { version = "1.0.141", default-features = false }
 serde_yaml = { version = "0.9.34", default-features = false }
-sqlx = { version = "0.8.6", default-features = false, features = [
-  "runtime-tokio-rustls",
+sqlx = { version = "0.9.0", default-features = false, features = [
+  "runtime-tokio",
+  "tls-rustls-ring",
   "postgres",
   "chrono",
   "uuid",
 ] }
 thiserror = { version = "2.0", default-features = false }
 tokio = { version = "1.47.0", default-features = false, features = ["rt-multi-thread", "macros", "signal"] }
-tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", default-features = false, rev = "c4b473b478b3adfbf8667d2fbe895d8423f1290b", features = [
+tokio-postgres = { git = "https://github.com/supabase/rust-postgres", default-features = false, rev = "8086f1fd19bd9abc0da86ba80f8b7dbdd676cb3e", features = [
   "runtime",
   "with-chrono-0_4",
   "with-uuid-1",
@@ -52,11 +51,12 @@ tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", defa
 tokio-rustls = { version = "0.26.2", default-features = false }
 tracing = { version = "0.1.41", default-features = false }
 tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "env-filter"] }
-x509-cert = { version = "0.2.2", default-features = false }
 
-etl          = { git = "https://github.com/supabase/etl", rev = "3122cb1c8df9649e9caaa4ee9d89e1611df29baf" }
-etl-postgres = { git = "https://github.com/supabase/etl", rev = "3122cb1c8df9649e9caaa4ee9d89e1611df29baf" }
-uuid         = { version = "1.19.0", default-features = false, features = ["v4"] }
+etl = { git = "https://github.com/supabase/etl", rev = "d5098c2774fabfb5b9e3a15930ea90ec5e9c042f" }
+etl-postgres = { git = "https://github.com/supabase/etl", rev = "d5098c2774fabfb5b9e3a15930ea90ec5e9c042f", features = [
+  "tokio",
+] }
+uuid = { version = "1.19.0", default-features = false, features = ["v4"] }
 
 # Optional sink dependencies.
 async-nats = { version = "0.38", optional = true }

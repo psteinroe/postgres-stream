@@ -154,14 +154,27 @@ fn cleanup_pubsub_container() {
     }
 }
 
+/// Postgres major version used by the test container.
+///
+/// Defaults to 17, the oldest version with failover slot support. Override with
+/// `TEST_POSTGRES_VERSION` (e.g. `TEST_POSTGRES_VERSION=15`).
+#[must_use]
+pub fn test_postgres_version() -> u32 {
+    std::env::var("TEST_POSTGRES_VERSION")
+        .ok()
+        .and_then(|version| version.parse().ok())
+        .unwrap_or(17)
+}
+
 pub async fn ensure_postgres() -> u16 {
     // Use get_or_init to handle concurrent initialization attempts
     *POSTGRES_PORT.get_or_init(|| {
         // Run container startup in a separate thread to avoid runtime-in-runtime panic
         std::thread::spawn(|| {
             // Configure postgres with wal_level=logical for replication support
-            let container: ContainerRequest<Postgres> =
-                Postgres::default().with_tag("16-alpine").with_cmd([
+            let container: ContainerRequest<Postgres> = Postgres::default()
+                .with_tag(format!("{}-alpine", test_postgres_version()))
+                .with_cmd([
                     "postgres",
                     "-c",
                     "wal_level=logical",
@@ -194,6 +207,7 @@ pub async fn test_pg_config() -> PgConnectionConfig {
 
     PgConnectionConfig {
         host: "127.0.0.1".to_owned(),
+        hostaddr: None,
         port,
         name: format!("pgstream_test_{}", Uuid::new_v4()),
         username: "postgres".to_owned(),

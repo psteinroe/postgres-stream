@@ -2,6 +2,7 @@
 //!
 //! Initializes and manages the lifecycle of the pgstream replication process.
 
+use crate::config::REPLICATION_OPTIONS;
 use crate::{
     config::{PipelineConfig, SinkConfig},
     migrations::migrate_etl,
@@ -11,11 +12,13 @@ use crate::{
     stream::PgStream,
     types::SlotName,
 };
-use etl::config::{ETL_REPLICATION_OPTIONS, IntoConnectOptions};
-use etl::error::EtlResult;
+use etl::config::{IntoConnectOptions, TlsConfig};
+use etl::destination::PipelineDestination;
+use etl::error::{ErrorKind, EtlResult};
 use etl::pipeline::Pipeline;
-use etl::store::both::postgres::PostgresStore;
+use etl::store::{PipelineStore, PostgresStore};
 use sqlx::postgres::PgPoolOptions;
+use std::sync::Arc;
 use tokio::signal::unix::{SignalKind, signal};
 use tracing::{error, info, warn};
 
@@ -29,6 +32,7 @@ use tracing::{error, info, warn};
 /// recover by setting a failover checkpoint and restarting the pipeline.
 pub async fn start_pipeline_with_config(config: PipelineConfig) -> EtlResult<()> {
     log_config(&config);
+    validate_tls_config(&config.stream.pg_connection.tls)?;
 
     // Run etl migrations before starting the pipeline
     migrate_etl(&config.stream.pg_connection).await?;
@@ -49,7 +53,7 @@ pub async fn start_pipeline_with_config(config: PipelineConfig) -> EtlResult<()>
                         config
                             .stream
                             .pg_connection
-                            .with_db(Some(&ETL_REPLICATION_OPTIONS)),
+                            .with_db(Some(&REPLICATION_OPTIONS)),
                     )
                     .await?;
 
@@ -74,7 +78,8 @@ pub async fn start_pipeline_with_config(config: PipelineConfig) -> EtlResult<()>
 /// Runs the pipeline once. Returns when the pipeline completes or fails.
 async fn run_pipeline(config: &PipelineConfig) -> EtlResult<()> {
     // Initialize state store for ETL pipeline state tracking
-    let state_store = PostgresStore::new(config.stream.id, config.stream.pg_connection.clone());
+    let state_store =
+        PostgresStore::new(config.stream.id, config.stream.pg_connection.clone()).await?;
 
     // Create sink based on configuration.
     let sink = match &config.sink {
@@ -242,6 +247,22 @@ async fn run_pipeline(config: &PipelineConfig) -> EtlResult<()> {
     start_pipeline_with_shutdown(pipeline).await
 }
 
+/// Rejects TLS without trusted root certificates.
+///
+/// etl rejects this when the pipeline starts, but pgstream connects for migrations before that,
+/// where a blank trust bundle fails with a certificate error instead.
+fn validate_tls_config(tls: &TlsConfig) -> EtlResult<()> {
+    if tls.enabled && tls.trusted_root_certs.trim().is_empty() {
+        return Err(etl::etl_error!(
+            ErrorKind::ConfigError,
+            "Invalid source TLS configuration",
+            "pg_connection.tls.trusted_root_certs must not be blank when TLS is enabled"
+        ));
+    }
+
+    Ok(())
+}
+
 /// Logs an allowlist of safe operational configuration fields.
 fn log_config(config: &PipelineConfig) {
     let stream = &config.stream;
@@ -250,6 +271,7 @@ fn log_config(config: &PipelineConfig) {
         sink_type = config.sink.kind(),
         max_batch_size = stream.batch.max_size,
         max_batch_fill_ms = stream.batch.max_fill_ms,
+        failover = stream.failover,
         tls_enabled = stream.pg_connection.tls.enabled,
         "pgstream daemon starting"
     );
@@ -263,20 +285,16 @@ fn log_config(config: &PipelineConfig) {
 #[tracing::instrument(skip(pipeline))]
 async fn start_pipeline_with_shutdown<S, D>(mut pipeline: Pipeline<S, D>) -> EtlResult<()>
 where
-    S: etl::store::state::StateStore
-        + etl::store::schema::SchemaStore
-        + etl::store::cleanup::CleanupStore
-        + Clone
-        + Send
-        + Sync
-        + 'static,
-    D: etl::destination::Destination + Clone + Send + Sync + 'static,
+    S: PipelineStore,
+    D: PipelineDestination,
 {
     // Start the pipeline
     pipeline.start().await?;
 
+    let pipeline = Arc::new(pipeline);
+
     // Spawn a task to listen for shutdown signals and trigger shutdown
-    let shutdown_tx = pipeline.shutdown_tx();
+    let shutdown_pipeline = Arc::clone(&pipeline);
     let shutdown_handle = tokio::spawn(async move {
         // Listen for SIGTERM, sent by Kubernetes before SIGKILL during pod termination.
         //
@@ -294,10 +312,7 @@ where
             }
         }
 
-        if let Err(e) = shutdown_tx.shutdown() {
-            warn!("failed to send shutdown signal: {:?}", e);
-            return;
-        }
+        shutdown_pipeline.shutdown();
 
         info!("pipeline shutdown successfully")
     });

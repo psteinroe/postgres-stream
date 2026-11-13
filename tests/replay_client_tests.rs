@@ -1,10 +1,7 @@
 use chrono::Utc;
 use postgres_stream::replay_client::ReplayClient;
-use postgres_stream::store::StreamStore;
-use postgres_stream::test_utils::{
-    TestDatabase, create_postgres_store, insert_events_to_db, test_stream_config,
-};
-use postgres_stream::types::{EventIdentifier, convert_events_from_table_rows};
+use postgres_stream::test_utils::{TestDatabase, insert_events_to_db};
+use postgres_stream::types::EventIdentifier;
 use uuid::Uuid;
 
 // Connection tests
@@ -142,10 +139,10 @@ async fn test_update_checkpoint_multiple_times() {
     );
 }
 
-// Copy stream tests
+// Events stream tests
 
 #[tokio::test(flavor = "multi_thread")]
-async fn test_get_events_copy_stream_empty_range() {
+async fn test_get_events_stream_empty_range() {
     let db = TestDatabase::spawn().await;
     db.ensure_today_partition().await;
 
@@ -158,12 +155,12 @@ async fn test_get_events_copy_stream_empty_range() {
 
     // Request range with same from/to (should be empty)
     let stream = client
-        .get_events_copy_stream(
+        .get_events_stream(
             events.first().expect("Should have event 0"),
             events.first().expect("Should have event 0"),
         )
         .await
-        .expect("Failed to get copy stream");
+        .expect("Failed to get events stream");
 
     // The stream should be empty (no events between same ID)
     use futures::StreamExt;
@@ -180,7 +177,7 @@ async fn test_get_events_copy_stream_empty_range() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn test_get_events_copy_stream_with_events() {
+async fn test_get_events_stream_with_events() {
     let db = TestDatabase::spawn().await;
     db.ensure_today_partition().await;
 
@@ -195,36 +192,23 @@ async fn test_get_events_copy_stream_with_events() {
         .await
         .unwrap();
 
-    // Get table schema to parse the copy stream
-    let config = test_stream_config(&db);
-    let store_backend = create_postgres_store(config.id, &db.config, &db.pool).await;
-    let store = StreamStore::create(config, store_backend).await.unwrap();
-    let table_schema = store.get_events_table_schema().await.unwrap();
-
     // Request range from event 0 to event 4 (should get events 1, 2, 3)
     let stream = client
-        .get_events_copy_stream(
+        .get_events_stream(
             events.first().expect("Should have event 0"),
             events.get(4).expect("Should have event 4"),
         )
         .await
-        .expect("Failed to get copy stream");
+        .expect("Failed to get events stream");
 
-    // Wrap with TableCopyStream to parse the COPY protocol
-    use etl::replication::stream::TableCopyStream;
     use futures::StreamExt;
     use tokio::pin;
-
-    let stream = TableCopyStream::wrap(stream, &table_schema.column_schemas, 1);
     pin!(stream);
 
-    let mut table_rows = Vec::new();
+    let mut replayed_events = Vec::new();
     while let Some(result) = stream.next().await {
-        table_rows.push(result.expect("Should parse row successfully"));
+        replayed_events.push(result.expect("Should parse row successfully"));
     }
-
-    let replayed_events =
-        convert_events_from_table_rows(table_rows, &table_schema.column_schemas).unwrap();
 
     // Should get events 1, 2, 3 (events between 0 and 4, exclusive)
     assert_eq!(
@@ -232,15 +216,19 @@ async fn test_get_events_copy_stream_with_events() {
         3,
         "Should have received exactly 3 events"
     );
-    assert!(
-        replayed_events
-            .iter()
-            .all(|event| event.lsn.is_some() && event.commit_lsn.is_none())
-    );
+    let expected_ids = events.get(1..4).unwrap().to_vec();
+    let replayed_ids: Vec<_> = replayed_events
+        .iter()
+        .map(|event| event.id.clone())
+        .collect();
+    assert_eq!(replayed_ids, expected_ids);
+    assert!(replayed_events.iter().all(|event| {
+        event.lsn == Some("0/100".parse().unwrap()) && event.commit_lsn.is_none()
+    }));
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn test_get_events_copy_stream_boundary_conditions() {
+async fn test_get_events_stream_boundary_conditions() {
     let db = TestDatabase::spawn().await;
     db.ensure_today_partition().await;
 
@@ -248,29 +236,19 @@ async fn test_get_events_copy_stream_boundary_conditions() {
         .await
         .expect("Failed to connect");
 
-    // Get table schema to parse the copy stream
-    let config = test_stream_config(&db);
-    let store_backend = create_postgres_store(config.id, &db.config, &db.pool).await;
-    let store = StreamStore::create(config, store_backend).await.unwrap();
-    let table_schema = store.get_events_table_schema().await.unwrap();
-
     // Insert events with specific timing
     let events = insert_events_to_db(&db, 10).await;
-
-    use etl::replication::stream::TableCopyStream;
     use futures::StreamExt;
     use tokio::pin;
 
     // Test boundary: from first to second (should exclude both boundaries, so 0 events)
     let stream = client
-        .get_events_copy_stream(
+        .get_events_stream(
             events.first().expect("Should have event 0"),
             events.get(1).expect("Should have event 1"),
         )
         .await
-        .expect("Failed to get copy stream");
-
-    let stream = TableCopyStream::wrap(stream, &table_schema.column_schemas, 1);
+        .expect("Failed to get events stream");
     pin!(stream);
 
     let mut count = 0;
@@ -282,14 +260,12 @@ async fn test_get_events_copy_stream_boundary_conditions() {
 
     // Test boundary: from middle to end (events 5, 6, 7, 8)
     let stream = client
-        .get_events_copy_stream(
+        .get_events_stream(
             events.get(4).expect("Should have event 4"),
             events.get(9).expect("Should have event 9"),
         )
         .await
-        .expect("Failed to get copy stream");
-
-    let stream = TableCopyStream::wrap(stream, &table_schema.column_schemas, 1);
+        .expect("Failed to get events stream");
     pin!(stream);
 
     let mut count = 0;
@@ -301,7 +277,7 @@ async fn test_get_events_copy_stream_boundary_conditions() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn test_update_checkpoint_while_copy_stream_active() {
+async fn test_update_checkpoint_while_events_stream_active() {
     let db = TestDatabase::spawn().await;
     db.ensure_today_partition().await;
 
@@ -318,25 +294,17 @@ async fn test_update_checkpoint_while_copy_stream_active() {
     // Insert enough events so COPY remains active after reading first batch.
     let events = insert_events_to_db(&db, 250).await;
 
-    let config = test_stream_config(&db);
-    let store_backend = create_postgres_store(config.id, &db.config, &db.pool).await;
-    let store = StreamStore::create(config, store_backend).await.unwrap();
-    let table_schema = store.get_events_table_schema().await.unwrap();
-
     // Keep COPY active by only partially consuming it.
-    use etl::replication::stream::TableCopyStream;
     use futures::StreamExt;
     use tokio::pin;
 
     let stream = client
-        .get_events_copy_stream(
+        .get_events_stream(
             events.first().expect("Should have event 0"),
             events.get(249).expect("Should have event 249"),
         )
         .await
-        .expect("Failed to get copy stream");
-
-    let stream = TableCopyStream::wrap(stream, &table_schema.column_schemas, 1);
+        .expect("Failed to get events stream");
     pin!(stream);
 
     for _ in 0..100 {
@@ -363,7 +331,7 @@ async fn test_update_checkpoint_while_copy_stream_active() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn test_get_events_copy_stream_filters_by_stream_id() {
+async fn test_get_events_stream_filters_by_stream_id() {
     let db = TestDatabase::spawn().await;
     db.ensure_today_partition().await;
 
@@ -418,27 +386,18 @@ async fn test_get_events_copy_stream_filters_by_stream_id() {
         .await
         .expect("Failed to connect");
 
-    // Get table schema to parse the copy stream
-    let config = test_stream_config(&db);
-    let store_backend = create_postgres_store(config.id, &db.config, &db.pool).await;
-    let store = StreamStore::create(config, store_backend).await.unwrap();
-    let table_schema = store.get_events_table_schema().await.unwrap();
-
     // Request events for stream 1 only (from event 0 to event 2, should get event 1)
     let stream = client
-        .get_events_copy_stream(
+        .get_events_stream(
             events_stream_1.first().expect("Should have event 0"),
             events_stream_1.get(2).expect("Should have event 2"),
         )
         .await
-        .expect("Failed to get copy stream");
+        .expect("Failed to get events stream");
 
     // Wrap with TableCopyStream to parse and verify only stream 1 events are returned
-    use etl::replication::stream::TableCopyStream;
     use futures::StreamExt;
     use tokio::pin;
-
-    let stream = TableCopyStream::wrap(stream, &table_schema.column_schemas, 1);
     pin!(stream);
 
     let mut count = 0;
@@ -472,7 +431,7 @@ async fn test_connection_survives_multiple_operations() {
 
         // Get copy stream
         let stream = client
-            .get_events_copy_stream(
+            .get_events_stream(
                 events.get(i).expect("Should have event"),
                 events.get(i + 1).expect("Should have next event"),
             )

@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use chrono::{Days, NaiveDate, Utc};
 use etl::config::{IntoConnectOptions, PgConnectionConfig};
-use sqlx::{Connection, Executor, PgConnection, PgPool, postgres::PgPoolOptions};
+use sqlx::{AssertSqlSafe, Connection, Executor, PgConnection, PgPool, postgres::PgPoolOptions};
 use tokio::runtime::Handle;
 
 use crate::migrations::{migrate_etl, migrate_pgstream};
@@ -117,7 +117,10 @@ async fn create_pg_database(config: &PgConnectionConfig) -> PgPool {
         .expect("Failed to connect to Postgres (admin)");
 
     connection
-        .execute(&*format!(r#"create database "{}";"#, config.name))
+        .execute(AssertSqlSafe(format!(
+            r#"create database "{}";"#,
+            config.name
+        )))
         .await
         .expect("Failed to create test database");
 
@@ -144,7 +147,7 @@ async fn drop_pg_database(config: &PgConnectionConfig) {
 
     // Terminate any remaining connections.
     if let Err(e) = connection
-        .execute(&*format!(
+        .execute(AssertSqlSafe(format!(
             r#"
             select pg_terminate_backend(pg_stat_activity.pid)
             from pg_stat_activity
@@ -152,7 +155,7 @@ async fn drop_pg_database(config: &PgConnectionConfig) {
             and pid <> pg_backend_pid();
             "#,
             config.name
-        ))
+        )))
         .await
     {
         eprintln!(
@@ -166,7 +169,10 @@ async fn drop_pg_database(config: &PgConnectionConfig) {
 
     // Drop the database.
     if let Err(e) = connection
-        .execute(&*format!(r#"drop database if exists "{}";"#, config.name))
+        .execute(AssertSqlSafe(format!(
+            r#"drop database if exists "{}";"#,
+            config.name
+        )))
         .await
     {
         eprintln!(
@@ -193,5 +199,29 @@ pub async fn create_today_partition(pool: &PgPool) -> Result<(), sqlx::Error> {
          for values from ('{today}') to ('{tomorrow}')"
     );
 
-    sqlx::query(&sql).execute(pool).await.map(|_| ())
+    sqlx::query(AssertSqlSafe(sql))
+        .execute(pool)
+        .await
+        .map(|_| ())
+}
+
+/// Returns whether the server supports failover replication slots (Postgres 17+).
+pub async fn supports_failover_slots(pool: &PgPool) -> bool {
+    let version: i32 = sqlx::query_scalar("select current_setting('server_version_num')::int")
+        .fetch_one(pool)
+        .await
+        .expect("Failed to read server version");
+
+    version >= 170_000
+}
+
+/// Returns the `failover` flag of a replication slot, or `None` if the slot does not exist.
+///
+/// Requires Postgres 17+.
+pub async fn slot_failover(pool: &PgPool, slot_name: &str) -> Option<bool> {
+    sqlx::query_scalar("select failover from pg_replication_slots where slot_name = $1")
+        .bind(slot_name)
+        .fetch_optional(pool)
+        .await
+        .expect("Failed to read replication slot")
 }

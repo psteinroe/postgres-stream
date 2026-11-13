@@ -104,6 +104,15 @@ Events are stored in a partitioned table with daily partitions:
 - **Automatic partition cleanup** for old data
 - Partitioning keeps the table fast and manageable
 
+## Database Objects
+
+On startup, Postgres Stream migrates two schemas in your database:
+
+- **`pgstream`** - The events table, stream state, and the publication per stream.
+- **`etl`** - Replication state of the underlying [supabase/etl](https://github.com/supabase/etl) library, plus two helper functions it calls at runtime: `etl.describe_table_schema` and `etl.describe_table_identity`.
+
+etl normally installs these helpers together with a `ddl_command_end` event trigger (`supabase_etl_ddl_message_trigger`) that propagates schema changes. Creating an event trigger requires superuser, which managed Postgres providers do not grant, and Postgres Stream does not need schema-change propagation. Postgres Stream therefore skips etl's source migrations and installs only the two helper functions through its own migrations. No event trigger is created.
+
 ## Next Steps
 
 - [Subscriptions](subscriptions.md) - Auto-capture table changes

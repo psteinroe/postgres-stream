@@ -1,10 +1,14 @@
 use chrono::{DateTime, Utc};
 use etl::{
-    destination::Destination,
+    data::TableRow,
+    destination::{
+        Destination, DestinationWriteStatus, DropTableForCopyResult, TableCopyBatchId,
+        WriteEventsDurability, WriteEventsResult, WriteTableRowsResult,
+    },
     error::EtlResult,
-    replication::stream::TableCopyStream,
-    store::schema::SchemaStore as SchemaStoreTrait,
-    types::{Event, TableId, TableRow},
+    event::Event,
+    schema::ReplicatedTableSchema,
+    store::SchemaStore as SchemaStoreTrait,
 };
 use futures::StreamExt;
 use tokio::pin;
@@ -19,10 +23,7 @@ use crate::{
     replay_client::ReplayClient,
     sink::Sink as SinkTrait,
     store::StreamStore,
-    types::{
-        EventIdentifier, StreamStatus, TriggeredEvent, convert_events_from_table_rows,
-        convert_stream_events_from_events,
-    },
+    types::{EventIdentifier, StreamStatus, TriggeredEvent, convert_stream_events_from_events},
     utils::task::TaskHandle,
 };
 
@@ -81,6 +82,22 @@ where
             config,
             maintenance_handle: TaskHandle::default(),
         })
+    }
+
+    /// Converts replicated events and publishes them to the sink in batches of at most
+    /// `batch.max_size` events.
+    async fn write_events_inline(&self, events: Vec<Event>) -> EtlResult<()> {
+        let schema = self.store.get_events_table_schema().await?;
+        let mut stream_events = convert_stream_events_from_events(events, &schema.column_schemas)?;
+
+        let max_size = self.config.batch.max_size.max(1);
+        while !stream_events.is_empty() {
+            let rest = stream_events.split_off(stream_events.len().min(max_size));
+            self.tick(stream_events).await?;
+            stream_events = rest;
+        }
+
+        Ok(())
     }
 
     /// Main processing tick for a batch of events.
@@ -249,22 +266,19 @@ where
 
         let replay_client =
             ReplayClient::connect(self.config.id, self.config.pg_connection.clone()).await?;
-        let table_schema = self.store.get_events_table_schema().await?;
 
         let replay_stream = replay_client
-            .get_events_copy_stream(&checkpoint_event.id, current_batch_event_id)
+            .get_events_stream(&checkpoint_event.id, current_batch_event_id)
             .await?;
-        let replay_stream = TableCopyStream::wrap(replay_stream, &table_schema.column_schemas, 1);
         let replay_stream = TimeoutBatchStream::wrap(replay_stream, self.config.batch.clone());
         pin!(replay_stream);
 
-        while let Some(table_rows) = replay_stream.next().await {
-            if table_rows.is_empty() {
+        while let Some(events) = replay_stream.next().await {
+            if events.is_empty() {
                 continue;
             }
 
-            let table_rows = table_rows.into_iter().collect::<Result<Vec<_>, _>>()?;
-            let events = convert_events_from_table_rows(table_rows, &table_schema.column_schemas)?;
+            let events = events.into_iter().collect::<EtlResult<Vec<_>>>()?;
 
             let last_event_id = events.last().unwrap().id.clone();
             let last_event_timestamp = events.last().unwrap().id.created_at;
@@ -313,30 +327,42 @@ where
         "pgstream"
     }
 
-    async fn truncate_table(&self, _table_id: TableId) -> EtlResult<()> {
+    async fn drop_table_for_copy(
+        &self,
+        _replicated_table_schema: &ReplicatedTableSchema,
+        async_result: DropTableForCopyResult<()>,
+    ) -> EtlResult<()> {
+        // There is no destination table to drop.
+        async_result.send(Ok(()));
+
         Ok(())
     }
 
     async fn write_table_rows(
         &self,
-        _table_id: TableId,
+        _replicated_table_schema: &ReplicatedTableSchema,
+        _batch_id: Option<TableCopyBatchId>,
         _table_rows: Vec<TableRow>,
+        async_result: WriteTableRowsResult,
     ) -> EtlResult<()> {
         // DataSync copies historical events - we don't need to process them.
         // We only process new events from the replication stream via write_events.
-        // In failover mode, handle_failover() uses COPY to get missed events.
+        // In failover mode, handle_failover() replays missed events from the events table.
+        async_result.send(Ok(DestinationWriteStatus::Durable));
+
         Ok(())
     }
 
-    async fn write_events(&self, events: Vec<Event>) -> EtlResult<()> {
-        let schema = self.store.get_events_table_schema().await?;
-        let stream_events = convert_stream_events_from_events(events, &schema.column_schemas)?;
-
-        if stream_events.is_empty() {
-            return Ok(());
-        }
-
-        self.tick(stream_events).await?;
+    async fn write_events(
+        &self,
+        events: Vec<Event>,
+        _durability: WriteEventsDurability,
+        async_result: WriteEventsResult,
+    ) -> EtlResult<()> {
+        // Events are published inline, so once `tick` returns every event of this and all
+        // earlier batches has been handled and the write is durable.
+        let result = self.write_events_inline(events).await;
+        async_result.send(result.map(|()| DestinationWriteStatus::Durable));
 
         Ok(())
     }

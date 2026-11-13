@@ -1,5 +1,5 @@
 use etl::pipeline::Pipeline;
-use etl::store::both::postgres::PostgresStore;
+use etl::store::PostgresStore;
 use postgres_stream::sink::memory::MemorySink;
 use postgres_stream::stream::PgStream;
 use postgres_stream::test_utils::{TestDatabase, test_stream_config_with_id, unique_pipeline_id};
@@ -44,7 +44,9 @@ async fn test_insert_and_update_share_commit_lsn_distinct_from_row_lsns() {
     }
 
     let sink = MemorySink::new();
-    let state_store = PostgresStore::new(pipeline_id, db.config.clone());
+    let state_store = PostgresStore::new(pipeline_id, db.config.clone())
+        .await
+        .expect("Failed to create PostgresStore");
     let pgstream = PgStream::create(stream_config.clone(), sink.clone(), state_store.clone())
         .await
         .unwrap();
@@ -163,8 +165,7 @@ async fn test_insert_and_update_share_commit_lsn_distinct_from_row_lsns() {
     })
     .await;
 
-    let shutdown_tx = pipeline.shutdown_tx();
-    shutdown_tx.shutdown().unwrap();
+    pipeline.shutdown();
     pipeline.wait().await.unwrap();
 
     let transaction_events = transaction_events.expect("transaction events should be replicated");

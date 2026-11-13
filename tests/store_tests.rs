@@ -228,19 +228,21 @@ async fn test_store_multiple_streams_isolated() {
     let config1 = StreamConfig {
         id: 1,
         pg_connection: db.config.clone(),
-        batch: etl::config::BatchConfig {
+        batch: postgres_stream::config::BatchConfig {
             max_size: 100,
             max_fill_ms: 1000,
         },
+        failover: false,
     };
 
     let config2 = StreamConfig {
         id: 2,
         pg_connection: db.config.clone(),
-        batch: etl::config::BatchConfig {
+        batch: postgres_stream::config::BatchConfig {
             max_size: 100,
             max_fill_ms: 1000,
         },
+        failover: false,
     };
 
     let store1 = StreamStore::create(

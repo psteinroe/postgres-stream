@@ -1,4 +1,4 @@
-use etl::types::PipelineId;
+use etl::pipeline::PipelineId;
 
 use crate::types::EventIdentifier;
 

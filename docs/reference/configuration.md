@@ -23,6 +23,7 @@ stream:
   batch:
     max_size: 1000
     max_fill_secs: 5
+  failover: false
 
 sink:
   type: kafka
@@ -99,16 +100,27 @@ Database password. Supports environment variable substitution: `${ENV_VAR}`.
 | Required | No |
 | Default | false |
 
-Enable TLS for database connection.
+Enable TLS for all database connections: replication, state, and failover replay. The server certificate and host name are verified against [`tls.trusted_root_certs`](#tlstrusted_root_certs). Replication and failover replay connections use SCRAM channel binding when the server offers it.
 
 #### `tls.trusted_root_certs`
 
 | | |
 |--|--|
 | Type | string |
-| Required | No |
+| Required | When `tls.enabled` is true |
 
-Path to CA certificate file for TLS verification.
+PEM-encoded CA certificates that sign the server certificate. This is the certificate content, not a path to a file. Startup fails with a configuration error if it is blank while `tls.enabled` is true.
+
+```yaml
+stream:
+  pg_connection:
+    tls:
+      enabled: true
+      trusted_root_certs: |
+        -----BEGIN CERTIFICATE-----
+        ...
+        -----END CERTIFICATE-----
+```
 
 #### `keepalive`
 
@@ -167,6 +179,20 @@ Maximum events per batch. Larger batches improve throughput but increase latency
 | Default | 5 |
 
 Maximum time to fill a batch in seconds. Lower values reduce latency but may result in smaller batches.
+
+### `stream.failover`
+
+| | |
+|--|--|
+| Type | boolean |
+| Required | No |
+| Default | false |
+
+Make the replication slot a [failover slot](https://www.postgresql.org/docs/current/logicaldecoding-explanation.html#LOGICALDECODING-REPLICATION-SLOTS-SYNCHRONIZATION) so it survives a switchover or failover to a standby. Requires Postgres 17 or newer; with an older server the stream fails to start when this is enabled.
+
+When enabled, a new slot is created with `FAILOVER`, and an existing slot is altered to be a failover slot on startup, without resyncing. A slot recreated after [slot invalidation](../concepts/failover.md#slot-invalidation) is also a failover slot.
+
+The standbys must synchronize failover slots before they can be used after promotion (`sync_replication_slots = on` and `hot_standby_feedback = on` on the standby, and the standby's physical slot in `synchronized_standby_slots` on the primary). Managed Postgres providers usually expose these as cluster parameters.
 
 ## Sink Configuration
 

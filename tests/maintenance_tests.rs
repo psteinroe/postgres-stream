@@ -1,9 +1,10 @@
 use chrono::Duration;
-use etl::store::both::postgres::PostgresStore;
+use etl::store::PostgresStore;
 use postgres_stream::maintenance::run_maintenance;
 use postgres_stream::sink::memory::MemorySink;
 use postgres_stream::stream::PgStream;
 use postgres_stream::test_utils::{TestDatabase, create_postgres_store, test_stream_config};
+use sqlx::AssertSqlSafe;
 
 async fn assert_events_lsn_brin_indexes(db: &TestDatabase) {
     let (parent_index_valid,): (bool,) = sqlx::query_as(
@@ -180,25 +181,25 @@ async fn test_maintenance_drops_old_partitions() {
     // Create an old partition (10 days ago - beyond 7 day retention)
     let old_date = chrono::Utc::now() - Duration::days(10);
     let old_partition_name = format!("events_{}", old_date.format("%Y%m%d"));
-    sqlx::query(&format!(
+    sqlx::query(AssertSqlSafe(format!(
         "create table pgstream.{} partition of pgstream.events
          for values from ('{}') to ('{}')",
         old_partition_name,
         old_date.format("%Y-%m-%d"),
         (old_date + Duration::days(1)).format("%Y-%m-%d")
-    ))
+    )))
     .execute(&db.pool)
     .await
     .unwrap();
 
     // Verify old partition exists
-    let exists_before: (bool,) = sqlx::query_as(&format!(
+    let exists_before: (bool,) = sqlx::query_as(AssertSqlSafe(format!(
         "select exists(
             select 1 from pg_tables
             where schemaname = 'pgstream'
             and tablename = '{old_partition_name}'
         )"
-    ))
+    )))
     .fetch_one(&db.pool)
     .await
     .unwrap();
@@ -211,13 +212,13 @@ async fn test_maintenance_drops_old_partitions() {
         .unwrap();
 
     // Old partition should be dropped
-    let exists_after: (bool,) = sqlx::query_as(&format!(
+    let exists_after: (bool,) = sqlx::query_as(AssertSqlSafe(format!(
         "select exists(
             select 1 from pg_tables
             where schemaname = 'pgstream'
             and tablename = '{old_partition_name}'
         )"
-    ))
+    )))
     .fetch_one(&db.pool)
     .await
     .unwrap();

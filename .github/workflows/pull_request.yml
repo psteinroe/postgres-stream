@@ -88,7 +88,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        pg: [15, 16, 17]
+        pg: [15, 16, 17, 18]
 
     steps:
       - name: Free Disk Space
@@ -98,30 +98,6 @@ jobs:
           dotnet: true
           haskell: true
           large-packages: false
-
-      - name: Start PostgreSQL with logical replication
-        run: |
-          docker run -d \
-            --name postgres \
-            -e POSTGRES_USER=postgres \
-            -e POSTGRES_PASSWORD=postgres \
-            -e POSTGRES_DB=testdb \
-            -p 5432:5432 \
-            --health-cmd "pg_isready -U postgres -d testdb" \
-            --health-interval 2s \
-            --health-timeout 5s \
-            --health-retries 5 \
-            postgres:${{ matrix.pg }} \
-            postgres \
-            -c wal_level=logical \
-            -c max_wal_senders=10 \
-            -c max_replication_slots=10
-
-          # Wait for postgres to be ready
-          until docker exec postgres pg_isready -U postgres -d testdb; do
-            echo "Waiting for postgres..."
-            sleep 1
-          done
 
       - name: Checkout PR branch
         uses: actions/checkout@v4
@@ -137,4 +113,7 @@ jobs:
 
       - name: Run tests
         run: cargo test --all-features
+        env:
+          # Postgres major version of the test container (see src/test_utils/container.rs)
+          TEST_POSTGRES_VERSION: ${{ matrix.pg }}
 
