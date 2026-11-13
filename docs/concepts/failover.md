@@ -40,7 +40,31 @@ No operator intervention required, with one exception: if a missing slot has no 
 
 ## Database Failover
 
-Replication slots normally live only on the primary, so a switchover or failover to a standby loses the slot. On Postgres 17+, set [`stream.failover`](../reference/configuration.md#streamfailover) to `true` to make the slot a failover slot that standbys keep in sync. If the slot is lost anyway, it is recovered as described in [Slot Loss](#slot-loss).
+Replication slots normally live only on the primary, so a switchover or failover to a standby loses the slot. On Postgres 17+, set [`stream.failover`](../reference/configuration.md#streamfailover) to `true` to make the slot a failover slot that standbys keep in sync. After a promotion, the stream reconnects to the new primary and resumes from the synced slot. Events that were published but not yet confirmed to the synced slot are published again.
+
+The slot survives a promotion only if the promoted standby synced it:
+
+| Where | Setting |
+|--|--|
+| Standby | `sync_replication_slots = on` |
+| Standby | `hot_standby_feedback = on` |
+| Standby | `primary_slot_name` set, and a `dbname` in `primary_conninfo` |
+| Primary | the standby's physical slot listed in `synchronized_standby_slots` |
+
+`synchronized_standby_slots` makes the primary wait until the listed standbys received the WAL before it sends the changes to the stream, so the stream never gets ahead of the standby it fails over to. When `stream.failover` is enabled and `synchronized_standby_slots` is empty, the stream logs a warning on startup. It still starts, because managed providers may configure standbys in ways the stream cannot see.
+
+A new slot is first synced as a temporary slot, and becomes usable on the standby once the stream confirmed changes on the primary. Promote only after `pg_replication_slots.synced` is `true` and `temporary` is `false` for the slot on the standby.
+
+If the promoted standby did not sync the slot (or `stream.failover` is off), the slot is missing on the new primary. The stream does not let etl create a new slot that skips the missed events: it recovers the slot as described in [Slot Loss](#slot-loss), on startup or after the running pipeline stops on the missing slot, and replays every event that may not have been delivered from the events table.
+
+### PlanetScale
+
+PlanetScale Postgres manages the standbys and `synchronized_standby_slots`, and waits for failover slots to be synced before a planned failover. Enable the following cluster parameters (Clusters > Parameters), then set `stream.failover: true`:
+
+- `hot_standby_feedback = on`
+- `sync_replication_slots = on`
+
+An existing slot is altered to be a failover slot on the next start. PlanetScale notifies you about slots without `failover = true` and eventually proceeds with planned failovers anyway, which loses such slots.
 
 ## Guarantees
 

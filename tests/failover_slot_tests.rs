@@ -7,6 +7,7 @@ use std::time::Duration;
 use etl::pipeline::Pipeline;
 use etl::store::PostgresStore;
 use postgres_stream::config::StreamConfig;
+use postgres_stream::queries::get_synchronized_standby_slots;
 use postgres_stream::sink::memory::MemorySink;
 use postgres_stream::stream::PgStream;
 use postgres_stream::test_utils::{
@@ -171,4 +172,19 @@ async fn test_failover_is_rejected_before_postgres_17() {
         err.to_string().contains("PostgreSQL 17"),
         "unexpected error: {err}"
     );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_synchronized_standby_slots_is_read_from_the_server() {
+    let db = TestDatabase::spawn().await;
+    let slots = get_synchronized_standby_slots(&db.pool)
+        .await
+        .expect("Failed to read synchronized_standby_slots");
+
+    // The test server has no standbys. Before Postgres 17 the setting does not exist.
+    if supports_failover_slots(&db.pool).await {
+        assert_eq!(slots.as_deref(), Some(""));
+    } else {
+        assert_eq!(slots, None);
+    }
 }
