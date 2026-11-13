@@ -88,9 +88,13 @@ macro_rules! missing {
     };
 }
 
-pub fn convert_event_from_table(
+/// Converts a row of `pgstream.events` into a [`TriggeredEvent`].
+///
+/// `column_schemas` must describe the row's values in order. Columns are matched by name, so
+/// columns pgstream does not know are ignored.
+pub fn convert_event_from_table<'a>(
     table_row: &mut TableRow,
-    column_schemas: &[ColumnSchema],
+    column_schemas: impl IntoIterator<Item = &'a ColumnSchema>,
     commit_lsn: Option<PgLsn>,
 ) -> EtlResult<TriggeredEvent> {
     let mut id = None;
@@ -100,7 +104,7 @@ pub fn convert_event_from_table(
     let mut stream_id = None;
     let mut lsn = None;
 
-    for (idx, col) in column_schemas.iter().enumerate() {
+    for (idx, col) in column_schemas.into_iter().enumerate() {
         let Some(cell) = table_row.values_mut().get_mut(idx) else {
             continue;
         };
@@ -139,10 +143,11 @@ pub fn convert_events_from_table_rows(
         .collect()
 }
 
-pub fn convert_stream_events_from_events(
-    events: Vec<Event>,
-    column_schemas: &[ColumnSchema],
-) -> EtlResult<Vec<TriggeredEvent>> {
+/// Converts the inserts of a replicated batch into [`TriggeredEvent`]s.
+///
+/// Each row is decoded with the schema it was replicated with, so a batch spanning a schema
+/// change of `pgstream.events` keeps every row aligned with its own columns.
+pub fn convert_stream_events_from_events(events: Vec<Event>) -> EtlResult<Vec<TriggeredEvent>> {
     events
         .into_iter()
         .filter_map(|event| match event {
@@ -151,7 +156,7 @@ pub fn convert_stream_events_from_events(
 
                 Some(convert_event_from_table(
                     &mut insert_event.table_row,
-                    column_schemas,
+                    insert_event.replicated_table_schema.column_schemas(),
                     commit_lsn,
                 ))
             }
@@ -353,7 +358,6 @@ mod tests {
 
     #[test]
     fn test_convert_live_insert_preserves_commit_lsn() {
-        let column_schemas = make_column_schemas();
         let id = Uuid::new_v4();
         let ts = Utc::now();
 
@@ -368,7 +372,7 @@ mod tests {
             Event::Unsupported,
         ];
 
-        let result = convert_stream_events_from_events(events, &column_schemas).unwrap();
+        let result = convert_stream_events_from_events(events).unwrap();
 
         // Only the Insert event should be converted
         assert_eq!(result.len(), 1);
@@ -381,18 +385,15 @@ mod tests {
 
     #[test]
     fn test_convert_stream_events_from_events_empty() {
-        let column_schemas = make_column_schemas();
         let events = vec![Event::Unsupported, Event::Unsupported];
 
-        let result = convert_stream_events_from_events(events, &column_schemas).unwrap();
+        let result = convert_stream_events_from_events(events).unwrap();
 
         assert_eq!(result.len(), 0);
     }
 
     #[test]
     fn test_convert_stream_events_from_events_error_propagates() {
-        let column_schemas = make_column_schemas();
-
         // Insert event with missing id
         let events = vec![Event::Insert(InsertEvent {
             commit_lsn: PgLsn::from(0),
@@ -408,9 +409,66 @@ mod tests {
             ]),
         })];
 
-        let result = convert_stream_events_from_events(events, &column_schemas);
+        let result = convert_stream_events_from_events(events);
 
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_convert_stream_events_uses_each_events_schema() {
+        let old_id = Uuid::new_v4();
+        let new_id = Uuid::new_v4();
+        let ts = Utc::now();
+
+        // After `alter table pgstream.events drop column metadata, add column extra text`, rows
+        // replicated before and after the change can arrive in the same batch.
+        let mut new_columns = make_column_schemas();
+        new_columns.retain(|column| column.name != "metadata");
+        new_columns.push(ColumnSchema::new(
+            "extra".to_string(),
+            Type::TEXT,
+            -1,
+            7,
+            true,
+        ));
+        let new_schema = ReplicatedTableSchema::all(Arc::new(TableSchema::new(
+            TableId::new(1),
+            TableName::new("pgstream".to_string(), "events".to_string()),
+            new_columns,
+        )));
+
+        let events = vec![
+            Event::Insert(InsertEvent {
+                commit_lsn: "0/200".parse().unwrap(),
+                tx_ordinal: 0,
+                replicated_table_schema: make_replicated_table_schema(),
+                table_row: make_table_row(old_id, ts, serde_json::json!({"seq": 1})),
+            }),
+            Event::Insert(InsertEvent {
+                commit_lsn: "0/300".parse().unwrap(),
+                tx_ordinal: 0,
+                replicated_table_schema: new_schema,
+                table_row: TableRow::new(vec![
+                    Cell::Uuid(new_id),
+                    Cell::TimestampTz(Timestamp::Value(ts)),
+                    Cell::Json(serde_json::json!({"seq": 2})),
+                    Cell::I64(1),
+                    Cell::Null,
+                    Cell::String("extra".to_string()),
+                ]),
+            }),
+        ];
+
+        let result = convert_stream_events_from_events(events).unwrap();
+
+        let [old, new] = result.as_slice() else {
+            panic!("expected two events, got {result:?}");
+        };
+        assert_eq!(old.id.id, old_id.to_string());
+        assert_eq!(old.payload, serde_json::json!({"seq": 1}));
+        assert_eq!(new.id.id, new_id.to_string());
+        assert_eq!(new.payload, serde_json::json!({"seq": 2}));
+        assert_eq!(new.metadata, None);
     }
 
     #[test]

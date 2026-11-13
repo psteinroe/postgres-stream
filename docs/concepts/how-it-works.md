@@ -111,7 +111,42 @@ On startup, Postgres Stream migrates two schemas in your database:
 - **`pgstream`** - The events table, stream state, and the publication per stream.
 - **`etl`** - Replication state of the underlying [supabase/etl](https://github.com/supabase/etl) library, plus two helper functions it calls at runtime: `etl.describe_table_schema` and `etl.describe_table_identity`.
 
-etl normally installs these helpers together with a `ddl_command_end` event trigger (`supabase_etl_ddl_message_trigger`) that propagates schema changes. Creating an event trigger requires superuser, which managed Postgres providers do not grant, and Postgres Stream does not need schema-change propagation. Postgres Stream therefore skips etl's source migrations and installs only the two helper functions through its own migrations. No event trigger is created.
+etl normally installs these helpers together with a `ddl_command_end` event trigger (`supabase_etl_ddl_message_trigger`) that propagates schema changes. Creating an event trigger requires superuser, which managed Postgres providers do not grant. Postgres Stream therefore skips etl's source migrations and installs only the two helper functions through its own migrations. No event trigger is created.
+
+etl still needs to learn about schema changes of `pgstream.events`. Postgres Stream's own migrations announce them by calling `pgstream.emit_events_schema_change()`, which emits the same logical message as etl's trigger without superuser. If you alter `pgstream.events` yourself, call it in the same transaction, after the change:
+
+```sql
+begin;
+alter table pgstream.events add column tenant_id text;
+select pgstream.emit_events_schema_change();
+commit;
+```
+
+Other tables, such as `pgstream.subscriptions`, are not replicated and can be altered freely, as can defaults, indexes and partitions of `pgstream.events`.
+
+### Schema Changes of the Events Table
+
+An unannounced change of the columns of `pgstream.events` makes replication fail with `CorruptedTableSchema` on every restart: replicated rows carry columns etl does not know. Calling `pgstream.emit_events_schema_change()` afterwards does not help, because the pipeline resumes from before the change. Recreate the slot instead, which makes etl read the current schema, and replay the events from the events table:
+
+1. Stop Postgres Stream.
+2. Run, with `<id>` the stream id:
+
+   ```sql
+   begin;
+   -- replay from before the first event the slot has not confirmed; the 16 MB margin covers
+   -- event lsns, which are taken from the WAL write position and can lag behind
+   update pgstream.streams
+   set slot_recovery_lsn = (
+     select restart_lsn - 16777216 from pg_replication_slots
+     where slot_name = 'supabase_etl_apply_<id>'
+   )
+   where id = <id>;
+   delete from etl.replication_state where pipeline_id = <id>;
+   commit;
+   select pg_drop_replication_slot('supabase_etl_apply_<id>');
+   ```
+
+3. Start Postgres Stream. etl creates a new slot and reads the current schema, and the events from `slot_recovery_lsn` on are replayed, so some may be delivered twice.
 
 ## Next Steps
 

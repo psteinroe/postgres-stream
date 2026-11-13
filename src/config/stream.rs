@@ -125,9 +125,10 @@ impl From<StreamConfig> for PipelineConfig {
             max_copy_connections_per_table: 1,
             // we handle recovery ourselves with checkpoint preservation
             invalidated_slot_behavior: InvalidatedSlotBehavior::Error,
-            // the event trigger installed by etl's source migrations requires superuser, and
-            // pgstream does not care about schema changes. pgstream installs the schema helper
-            // functions etl calls at runtime in its own migrations instead.
+            // the event trigger installed by etl's source migrations requires superuser.
+            // pgstream installs the schema helper functions etl calls at runtime in its own
+            // migrations instead, and announces schema changes of the events table with
+            // `pgstream.emit_events_schema_change()`.
             run_source_migrations: false,
             memory_refresh_interval_ms: PipelineConfig::DEFAULT_MEMORY_REFRESH_INTERVAL_MS,
             table_sync_monitor_refresh_interval_ms:
