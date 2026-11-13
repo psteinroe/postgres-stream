@@ -29,8 +29,24 @@ const NUM_POOL_CONNECTIONS: u32 = 1;
 struct StreamState {
     next_maintenance_at: DateTime<Utc>,
     status: StreamStatus,
+    /// Inclusive end of the failover replay window, see [`StreamStore::extend_failover_window`].
+    failover_window_end: Option<EventIdentifier>,
     /// Whether slot recovery left a replay lower bound to resolve on the next batch.
     slot_recovery_pending: bool,
+}
+
+/// Returns the earliest and the latest event of a batch by `(created_at, id)`.
+#[must_use]
+pub fn replay_bounds(events: &[TriggeredEvent]) -> Option<(EventIdentifier, EventIdentifier)> {
+    let first = events
+        .iter()
+        .map(|e| &e.id)
+        .min_by(|a, b| a.cmp_replay_order(b))?;
+    let last = events
+        .iter()
+        .map(|e| &e.id)
+        .max_by(|a, b| a.cmp_replay_order(b))?;
+    Some((first.clone(), last.clone()))
 }
 
 #[derive(Debug)]
@@ -59,6 +75,7 @@ impl<S: SchemaStore> StreamStore<S> {
         let mut state = StreamState {
             next_maintenance_at: DateTime::UNIX_EPOCH,
             status: StreamStatus::Healthy,
+            failover_window_end: None,
             slot_recovery_pending: false,
         };
 
@@ -91,6 +108,10 @@ impl<S: SchemaStore> StreamStore<S> {
                 state.status = StreamStatus::Failover {
                     checkpoint_event_id,
                 };
+                state.failover_window_end = row
+                    .failover_window_end_id
+                    .zip(row.failover_window_end_ts)
+                    .map(|(id, created_at)| EventIdentifier::new(id, created_at));
             } else {
                 state.status = StreamStatus::Healthy;
             }
@@ -132,8 +153,71 @@ impl<S: SchemaStore> StreamStore<S> {
         Ok((state.status.clone(), state.next_maintenance_at))
     }
 
+    /// Returns the inclusive end of the failover replay window from memory.
+    pub async fn get_failover_window_end(&self) -> Option<EventIdentifier> {
+        self.state.read().await.failover_window_end.clone()
+    }
+
     /// Write stream status into memory and to Postgres.
+    ///
+    /// Becoming healthy clears the failover replay window, setting a failover checkpoint keeps
+    /// its end.
     pub async fn store_stream_status(&self, status: StreamStatus) -> EtlResult<()> {
+        let window_end = match &status {
+            StreamStatus::Failover { .. } => self.get_failover_window_end().await,
+            StreamStatus::Healthy => None,
+        };
+        self.store_failover_window(status, window_end).await
+    }
+
+    /// Extends the failover replay window to cover a batch, entering failover if healthy.
+    ///
+    /// Call this for every batch that failed to publish or was dropped during failover, before
+    /// reporting it as written, with the batch's [`replay_bounds`]. The window's start (the
+    /// failover checkpoint) becomes the earliest and its end the latest of the window and the
+    /// batch by `(created_at, id)`. Batches arrive in commit order, so their events can lie
+    /// anywhere relative to the window. Returns whether the stream entered failover.
+    pub async fn extend_failover_window(
+        &self,
+        (first, last): &(EventIdentifier, EventIdentifier),
+    ) -> EtlResult<bool> {
+        let (status, window_end) = {
+            let state = self.state.read().await;
+            (state.status.clone(), state.failover_window_end.clone())
+        };
+
+        let (entered_failover, start, end) = match status {
+            StreamStatus::Healthy => (true, first.clone(), last.clone()),
+            StreamStatus::Failover {
+                checkpoint_event_id,
+            } => {
+                let start = std::cmp::min_by(checkpoint_event_id, first.clone(), |a, b| {
+                    a.cmp_replay_order(b)
+                });
+                // A checkpoint without an end (written by an older version) replayed only up to
+                // the batch that ends failover. The start bounds what it covered.
+                let end = window_end.unwrap_or_else(|| start.clone());
+                let end = std::cmp::max_by(end, last.clone(), |a, b| a.cmp_replay_order(b));
+                (false, start, end)
+            }
+        };
+
+        self.store_failover_window(
+            StreamStatus::Failover {
+                checkpoint_event_id: start,
+            },
+            Some(end),
+        )
+        .await?;
+
+        Ok(entered_failover)
+    }
+
+    async fn store_failover_window(
+        &self,
+        status: StreamStatus,
+        window_end: Option<EventIdentifier>,
+    ) -> EtlResult<()> {
         let (checkpoint_id, checkpoint_ts) = match &status {
             StreamStatus::Failover {
                 checkpoint_event_id,
@@ -143,6 +227,8 @@ impl<S: SchemaStore> StreamStore<S> {
             ),
             StreamStatus::Healthy => (None, None),
         };
+        let (window_end_id, window_end_ts) =
+            window_end.clone().map(|e| (e.id, e.created_at)).unzip();
 
         let pool = Self::connect_temporary(&self.stream_config.pg_connection).await?;
         upsert_stream_status(
@@ -150,11 +236,14 @@ impl<S: SchemaStore> StreamStore<S> {
             self.stream_config.id as i64,
             checkpoint_id,
             checkpoint_ts,
+            window_end_id,
+            window_end_ts,
         )
         .await?;
 
         let mut state = self.state.write().await;
         state.status = status;
+        state.failover_window_end = window_end;
         Ok(())
     }
 
@@ -168,18 +257,19 @@ impl<S: SchemaStore> StreamStore<S> {
         }
 
         let pool = Self::connect_temporary(&self.stream_config.pg_connection).await?;
-        let checkpoint = resolve_slot_recovery(&pool, self.stream_config.id).await?;
+        let window = resolve_slot_recovery(&pool, self.stream_config.id).await?;
 
         let mut state = self.state.write().await;
         state.slot_recovery_pending = false;
 
-        let Some((event_id, event_created_at)) = checkpoint else {
+        let Some(window) = window else {
             return Ok(false);
         };
         let entered_failover = matches!(state.status, StreamStatus::Healthy);
         state.status = StreamStatus::Failover {
-            checkpoint_event_id: EventIdentifier::new(event_id, event_created_at),
+            checkpoint_event_id: window.start,
         };
+        state.failover_window_end = Some(window.end);
 
         Ok(entered_failover)
     }

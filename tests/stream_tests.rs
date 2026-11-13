@@ -1000,3 +1000,160 @@ async fn test_write_events_failure_on_last_batch_is_replayed_by_next_write() {
     let (status, _) = stream.store().get_stream_state().await.unwrap();
     assert!(matches!(status, StreamStatus::Healthy));
 }
+
+// Failover replay window tests
+
+async fn published_ids(sink: &FailableSink) -> HashSet<String> {
+    sink.events().await.into_iter().map(|e| e.id.id).collect()
+}
+
+/// Batches arrive in commit order, so a batch dropped during failover can hold events that sort
+/// after the batch that ends failover.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_failover_replays_dropped_batch_sorted_after_recovery_batch() {
+    let db = TestDatabase::spawn().await;
+    let config = test_stream_config(&db);
+    let sink = FailableSink::new();
+    let (store, table_id) =
+        create_postgres_store_with_table_id(config.id, &db.config, &db.pool).await;
+
+    let stream: PgStream<FailableSink, PostgresStore> =
+        PgStream::create(config.clone(), sink.clone(), store)
+            .await
+            .expect("Failed to create PgStream");
+
+    // created_at of e0 < e1 < e2 < e3
+    let e = insert_events_to_db(&db, 4).await;
+    let write = |id: usize| {
+        let event =
+            make_event_with_id(table_id, e.get(id).unwrap(), serde_json::json!({"seq": id}));
+        write_events(&stream, vec![event])
+    };
+
+    // [e0] published
+    sink.succeed_always();
+    write(0).await.unwrap();
+
+    // [e1] fails and enters failover; [e3] is dropped because the checkpoint republish fails
+    sink.fail_on_calls(1, 3);
+    write(1).await.unwrap();
+    write(3).await.unwrap();
+
+    // [e2] ends failover; e3 sorts after it but must be replayed
+    sink.succeed_always();
+    write(2).await.unwrap();
+
+    let published = published_ids(&sink).await;
+    for (i, event) in e.iter().enumerate() {
+        assert!(published.contains(&event.id), "e{i} should be published");
+    }
+
+    let (status, _) = stream.store().get_stream_state().await.unwrap();
+    assert!(matches!(status, StreamStatus::Healthy));
+    assert_eq!(stream.store().get_failover_window_end().await, None);
+}
+
+/// Events of a failed batch can sort before the batch's first event.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_failover_replays_failed_batch_events_before_its_first_event() {
+    let db = TestDatabase::spawn().await;
+    let config = test_stream_config(&db);
+    let sink = FailableSink::new();
+    let (store, table_id) =
+        create_postgres_store_with_table_id(config.id, &db.config, &db.pool).await;
+
+    let stream: PgStream<FailableSink, PostgresStore> =
+        PgStream::create(config.clone(), sink.clone(), store)
+            .await
+            .expect("Failed to create PgStream");
+
+    let e = insert_events_to_db(&db, 5).await;
+    let event = |id: usize| {
+        make_event_with_id(table_id, e.get(id).unwrap(), serde_json::json!({"seq": id}))
+    };
+
+    sink.succeed_always();
+    write_events(&stream, vec![event(0)]).await.unwrap();
+
+    // [e3, e1] fails: the window must start at e1, not at the batch's first event
+    sink.fail_on_call(1);
+    write_events(&stream, vec![event(3), event(1)])
+        .await
+        .unwrap();
+
+    let (status, _) = stream.store().get_stream_state().await.unwrap();
+    match status {
+        StreamStatus::Failover {
+            checkpoint_event_id,
+        } => assert_eq!(checkpoint_event_id.id, e.get(1).unwrap().id),
+        StreamStatus::Healthy => panic!("Expected Failover status"),
+    }
+    assert_eq!(
+        stream
+            .store()
+            .get_failover_window_end()
+            .await
+            .map(|end| end.id),
+        Some(e.get(3).unwrap().id.clone())
+    );
+
+    sink.succeed_always();
+    write_events(&stream, vec![event(4)]).await.unwrap();
+
+    let published = published_ids(&sink).await;
+    for (i, event) in e.iter().enumerate() {
+        assert!(published.contains(&event.id), "e{i} should be published");
+    }
+}
+
+/// The replay window is durable: a restart while in failover still replays dropped batches.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_failover_replays_dropped_batch_after_restart() {
+    let db = TestDatabase::spawn().await;
+    let config = test_stream_config(&db);
+    let sink = FailableSink::new();
+    let (store, table_id) =
+        create_postgres_store_with_table_id(config.id, &db.config, &db.pool).await;
+
+    let e = insert_events_to_db(&db, 4).await;
+    let event = |id: usize| {
+        make_event_with_id(table_id, e.get(id).unwrap(), serde_json::json!({"seq": id}))
+    };
+
+    {
+        let stream: PgStream<FailableSink, PostgresStore> =
+            PgStream::create(config.clone(), sink.clone(), store.clone())
+                .await
+                .expect("Failed to create PgStream");
+
+        sink.succeed_always();
+        write_events(&stream, vec![event(0)]).await.unwrap();
+
+        // [e1] fails, [e3] is dropped
+        sink.fail_on_calls(1, 3);
+        write_events(&stream, vec![event(1)]).await.unwrap();
+        write_events(&stream, vec![event(3)]).await.unwrap();
+    }
+
+    // Restart: a new instance loads the window from the database
+    let stream: PgStream<FailableSink, PostgresStore> =
+        PgStream::create(config.clone(), sink.clone(), store)
+            .await
+            .expect("Failed to create PgStream after restart");
+    assert_eq!(
+        stream
+            .store()
+            .get_failover_window_end()
+            .await
+            .map(|end| end.id),
+        Some(e.get(3).unwrap().id.clone())
+    );
+
+    sink.succeed_always();
+    write_events(&stream, vec![event(2)]).await.unwrap();
+
+    let published = published_ids(&sink).await;
+    for (i, event) in e.iter().enumerate() {
+        assert!(published.contains(&event.id), "e{i} should be published");
+    }
+}

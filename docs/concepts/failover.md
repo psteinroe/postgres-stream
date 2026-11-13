@@ -14,10 +14,12 @@ Events are stored in a partitioned table, not just the WAL. This means:
 
 When the sink is unavailable:
 
-1. Checkpoint saved at failed event
-2. Retries until sink recovers
-3. Replays missed events from the events table
-4. Resumes normal streaming
+1. Records the failed batch in a replay window: the checkpoint is its earliest event and the window end its latest, by `(created_at, id)`
+2. Retries the checkpoint event with every new batch. While the sink is still down, the new batch is dropped and the window extended to cover it, before the batch is acknowledged
+3. Once the sink accepts the checkpoint event, replays every event from the checkpoint up to the window end, or up to the current batch if that is later
+4. Publishes the current batch and resumes normal streaming
+
+Batches arrive in commit order, not in `created_at` order, so a failed or dropped batch can hold events that sort before its first event or after the batch that ends failover. The window covers both. The checkpoint and window end live in `pgstream.streams` and survive restarts. Replay progress is saved after every replayed batch.
 
 ## Slot Loss
 
@@ -26,7 +28,9 @@ The replication slot is lost when Postgres invalidates it (`max_slot_wal_keep_si
 1. Determines the lowest event `lsn` that may not have been delivered
 2. Sets the checkpoint to the first event at or after that position
 3. Drops the slot and restarts the pipeline with a new one
-4. Replays from the checkpoint
+4. When the new slot delivers its first batch, replays every event from the checkpoint up to that time
+
+Events the new slot does not deliver were committed before it existed, so their `created_at` is earlier than its first batch. pgstream adds one minute to allow for clock differences between database hosts.
 
 An event's `lsn` is the WAL position at insert time, not at commit. To include events of transactions that were open at the last delivered position, pgstream records the slot's `restart_lsn` every 10 seconds and replays from the lowest of the recorded `restart_lsn` and the last durable position (the slot's `confirmed_flush_lsn`, or etl's apply progress in `etl.replication_progress` for a missing slot), minus `wal_buffers`.
 
@@ -40,6 +44,11 @@ Replication slots normally live only on the primary, so a switchover or failover
 
 ## Guarantees
 
-- **Zero data loss** - As long as downtime < partition retention (7 days)
-- **At-least-once delivery** - Events may repeat during replay
-- **Order preserved** - Events replay in order
+- **At-least-once delivery** - Every event is published at least once, as long as it is replayed before partition retention drops it (7 days). Events may repeat during replay
+- **Replay order** - Replayed events are published in `(created_at, id)` order, followed by the batch that ended failover
+
+Assumptions:
+
+- Events are not deleted from the events table before they are delivered
+- `created_at` is not set more than one minute ahead of the database clock (the default, `clock_timestamp()`, never is)
+- A lost slot is replayed from the lowest of its recorded `restart_lsn` and its last durable position. If it was lost before pgstream recorded its `restart_lsn`, events inserted before that position by transactions that committed after it are not replayed
