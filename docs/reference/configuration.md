@@ -1,6 +1,6 @@
 # Configuration Reference
 
-Complete reference for `config.yaml` options.
+Complete reference for the configuration options. See [Loading Configuration](#loading-configuration) for where they are read from.
 
 ## Full Example
 
@@ -22,7 +22,7 @@ stream:
       retries: 3
   batch:
     max_size: 1000
-    max_fill_secs: 5
+    max_fill_ms: 5000
   failover: false
 
 sink:
@@ -166,19 +166,19 @@ Controls how events are grouped before delivery.
 |--|--|
 | Type | integer |
 | Required | No |
-| Default | 1000 |
+| Default | 100000 |
 
 Maximum events per batch. Larger batches improve throughput but increase latency.
 
-#### `max_fill_secs`
+#### `max_fill_ms`
 
 | | |
 |--|--|
 | Type | integer |
 | Required | No |
-| Default | 5 |
+| Default | 10000 |
 
-Maximum time to fill a batch in seconds. Lower values reduce latency but may result in smaller batches.
+Maximum time to fill a batch in milliseconds. Lower values reduce latency but may result in smaller batches.
 
 ### `stream.failover`
 
@@ -224,29 +224,32 @@ sink:
 
 See the [Sinks](../sinks/index.md) section for sink-specific configuration.
 
-## Environment Variables
+## Loading Configuration
 
-Use `${VAR_NAME}` syntax to substitute environment variables:
+Postgres Stream reads its configuration from a directory, merging three sources in order (later ones win):
 
-```yaml
-stream:
-  pg_connection:
-    password: ${POSTGRES_PASSWORD}
+1. `base.yaml`, `base.yml` or `base.json` (required)
+2. `<environment>.yaml`, `.yml` or `.json` (optional), where `<environment>` is `APP_ENVIRONMENT`: `prod` (default), `staging` or `dev`
+3. Environment variables prefixed with `APP_`
 
-sink:
-  type: kafka
-  sasl_password: ${KAFKA_PASSWORD}
-```
-
-## Configuration File Location
-
-By default, Postgres Stream looks for `config.yaml` in the current directory.
-
-Override with the `CONFIG_PATH` environment variable:
+The directory is `APP_CONFIG_DIR` if set, otherwise `configuration` in the current directory. The Docker images run from `/app` and ship a minimal `/app/configuration/base.yml`, so mount your own directory over it or set `APP_CONFIG_DIR`:
 
 ```bash
-CONFIG_PATH=/etc/postgres-stream/config.yaml postgres-stream
+docker run -v $(pwd)/configuration:/app/configuration \
+  ghcr.io/psteinroe/postgres-stream:kafka-latest
 ```
+
+### Environment Variables
+
+Every option can be set with an environment variable: prefix the path with `APP_` and separate nested keys with `__` (double underscore). Values are parsed as numbers and booleans where possible. Use this for secrets instead of writing them into the files:
+
+```bash
+APP_STREAM__PG_CONNECTION__PASSWORD=secret
+APP_STREAM__BATCH__MAX_FILL_MS=1000
+APP_SINK__TYPE=kafka
+```
+
+Configuration files do not expand `${VAR}` references.
 
 ## Metrics
 

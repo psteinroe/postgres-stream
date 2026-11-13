@@ -1,16 +1,17 @@
 use chrono::Duration;
 use etl::data::Cell;
-use etl::destination::Destination;
+use etl::destination::{Destination, DestinationWriteStatus};
 use etl::event::Event;
 use etl::schema::PgLsn;
 use etl::store::PostgresStore;
+use postgres_stream::config::StreamConfig;
 use postgres_stream::sink::memory::MemorySink;
 use postgres_stream::stream::PgStream;
 use postgres_stream::test_utils::{
     FailableSink, TestDatabase, create_postgres_store, create_postgres_store_with_table_id,
     insert_events_to_db, make_event_with_id, make_test_event, test_stream_config, write_events,
 };
-use postgres_stream::types::{StreamStatus, TriggeredEvent};
+use postgres_stream::types::{EventIdentifier, StreamStatus, TriggeredEvent};
 use std::collections::HashSet;
 use std::time::Duration as StdDuration;
 
@@ -878,4 +879,124 @@ async fn test_failover_flaky_sink_checkpoint_publish_retries() {
             event_id.id
         );
     }
+}
+
+// Batch splitting
+
+/// Returns a stream config whose batches hold at most `max_size` events.
+fn small_batch_config(db: &TestDatabase, max_size: usize) -> StreamConfig {
+    let mut config = test_stream_config(db);
+    config.batch.max_size = max_size;
+    config
+}
+
+fn assert_all_published(published: &[TriggeredEvent], event_ids: &[EventIdentifier]) {
+    let published_ids: HashSet<&str> = published.iter().map(|e| e.id.id.as_str()).collect();
+    for event_id in event_ids {
+        assert!(
+            published_ids.contains(event_id.id.as_str()),
+            "Event {} should be published",
+            event_id.id
+        );
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_write_events_splits_into_batches_of_max_size() {
+    let db = TestDatabase::spawn().await;
+    let config = small_batch_config(&db, 3);
+    let sink = FailableSink::new();
+    let (store, table_id) =
+        create_postgres_store_with_table_id(config.id, &db.config, &db.pool).await;
+    let stream: PgStream<FailableSink, PostgresStore> =
+        PgStream::create(config, sink.clone(), store)
+            .await
+            .expect("Failed to create PgStream");
+
+    let event_ids = insert_events_to_db(&db, 8).await;
+    let events = event_ids
+        .iter()
+        .enumerate()
+        .map(|(i, id)| make_event_with_id(table_id, id, serde_json::json!({"seq": i})))
+        .collect();
+
+    write_events(&stream, events).await.unwrap();
+
+    // 3 + 3 + 2 events, published in order.
+    assert_eq!(sink.call_count(), 3);
+    let published_ids: Vec<String> = sink.events().await.into_iter().map(|e| e.id.id).collect();
+    let expected_ids: Vec<String> = event_ids.iter().map(|e| e.id.clone()).collect();
+    assert_eq!(published_ids, expected_ids);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_write_events_failure_on_middle_batch_loses_nothing() {
+    let db = TestDatabase::spawn().await;
+    let config = small_batch_config(&db, 3);
+    let sink = FailableSink::new();
+    let (store, table_id) =
+        create_postgres_store_with_table_id(config.id, &db.config, &db.pool).await;
+    let stream: PgStream<FailableSink, PostgresStore> =
+        PgStream::create(config, sink.clone(), store)
+            .await
+            .expect("Failed to create PgStream");
+
+    let event_ids = insert_events_to_db(&db, 9).await;
+    let events = event_ids
+        .iter()
+        .enumerate()
+        .map(|(i, id)| make_event_with_id(table_id, id, serde_json::json!({"seq": i})))
+        .collect();
+
+    // Calls: 0 = events 0-2, 1 = events 3-5 (fails), then the last batch replays from the
+    // checkpoint (event 3) before publishing events 6-8.
+    sink.fail_on_call(1);
+    let status = write_events(&stream, events).await.unwrap();
+    assert_eq!(status, DestinationWriteStatus::Durable);
+
+    assert_all_published(&sink.events().await, &event_ids);
+    let (status, _) = stream.store().get_stream_state().await.unwrap();
+    assert!(
+        matches!(status, StreamStatus::Healthy),
+        "Stream should recover within the same write"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_write_events_failure_on_last_batch_is_replayed_by_next_write() {
+    let db = TestDatabase::spawn().await;
+    let config = small_batch_config(&db, 3);
+    let sink = FailableSink::new();
+    let (store, table_id) =
+        create_postgres_store_with_table_id(config.id, &db.config, &db.pool).await;
+    let stream: PgStream<FailableSink, PostgresStore> =
+        PgStream::create(config, sink.clone(), store)
+            .await
+            .expect("Failed to create PgStream");
+
+    let event_ids = insert_events_to_db(&db, 7).await;
+    let events: Vec<_> = event_ids
+        .iter()
+        .enumerate()
+        .map(|(i, id)| make_event_with_id(table_id, id, serde_json::json!({"seq": i})))
+        .collect();
+    let (first_write, second_write) = events.split_at(6);
+
+    // The last batch (events 3-5) fails: the write is still durable because the events are
+    // recovered from the events table.
+    sink.fail_on_call(1);
+    write_events(&stream, first_write.to_vec()).await.unwrap();
+    let (status, _) = stream.store().get_stream_state().await.unwrap();
+    assert_eq!(
+        status,
+        StreamStatus::Failover {
+            checkpoint_event_id: event_ids.get(3).cloned().unwrap()
+        }
+    );
+
+    write_events(&stream, second_write.to_vec()).await.unwrap();
+
+    assert_all_published(&sink.events().await, &event_ids);
+    let (status, _) = stream.store().get_stream_state().await.unwrap();
+    assert!(matches!(status, StreamStatus::Healthy));
 }

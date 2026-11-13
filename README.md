@@ -64,7 +64,7 @@ While Postgres Stream provides strong durability guarantees, there are some cons
 ## Quick Start
 
 ```yaml
-# config.yaml
+# configuration/base.yml
 stream:
   id: 1
   pg_connection:
@@ -77,7 +77,7 @@ stream:
       enabled: false
   batch:
     max_size: 1000
-    max_fill_secs: 5
+    max_fill_ms: 5000
 
 sink:
   type: kafka
@@ -87,7 +87,7 @@ sink:
 
 ```bash
 # Run with Docker
-docker run -v $(pwd)/config.yaml:/config.yaml \
+docker run -v $(pwd)/configuration:/app/configuration \
   ghcr.io/psteinroe/postgres-stream:kafka-latest
 ```
 

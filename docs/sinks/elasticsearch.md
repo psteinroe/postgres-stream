@@ -78,7 +78,7 @@ stream:
       enabled: false
   batch:
     max_size: 1000
-    max_fill_secs: 5
+    max_fill_ms: 5000
 
 sink:
   type: elasticsearch

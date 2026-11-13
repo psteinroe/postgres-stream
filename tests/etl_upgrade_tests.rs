@@ -287,6 +287,11 @@ async fn test_upgrade_from_old_pgstream_reuses_state_and_slot() {
         events.first().map(|event| event.payload.clone()),
         Some(serde_json::json!({"written_before_upgrade": true}))
     );
+    // The old stored schema recorded the lsn column as `PG_LSN`; it must still be parsed.
+    assert!(
+        events.first().is_some_and(|event| event.lsn.is_some()),
+        "the event's lsn should be parsed from the migrated schema: {events:?}"
+    );
 
     // All etl store migrations applied on top of the old base, whose checksum still matches.
     let etl_migrations = applied_migrations(&db.pool, "etl").await;
@@ -339,5 +344,100 @@ async fn test_upgrade_from_old_pgstream_reuses_state_and_slot() {
         .await
         .unwrap();
         assert!(slot_exists);
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_upgrade_two_streams_in_one_database() {
+    let db = TestDatabase::spawn_without_migrations().await;
+    apply_old_migrations(&db).await;
+    db.ensure_today_partition().await;
+
+    let failover = supports_failover_slots(&db.pool).await;
+    let stream_configs: Vec<_> = (0..2)
+        .map(|_| {
+            let mut stream_config = test_stream_config_with_id(&db, unique_pipeline_id());
+            stream_config.failover = failover;
+            stream_config
+        })
+        .collect();
+
+    for stream_config in &stream_configs {
+        insert_old_pipeline_state(&db.pool, stream_config.id).await;
+        sqlx::query("insert into pgstream.events (payload, stream_id) values ($1, $2)")
+            .bind(serde_json::json!({"stream": stream_config.id}))
+            .bind(stream_config.id as i64)
+            .execute(&db.pool)
+            .await
+            .unwrap();
+    }
+
+    migrate_etl(&db.config)
+        .await
+        .expect("etl store migrations should upgrade the old database");
+
+    // Both streams run at the same time, each with its own pipeline.
+    let mut pipelines = Vec::new();
+    for stream_config in &stream_configs {
+        let sink = MemorySink::new();
+        let state_store = PostgresStore::new(stream_config.id, db.config.clone())
+            .await
+            .expect("Failed to create PostgresStore");
+        let pgstream = PgStream::create(stream_config.clone(), sink.clone(), state_store.clone())
+            .await
+            .expect("Failed to create PgStream");
+        let mut pipeline = Pipeline::new(stream_config.clone().into(), state_store, pgstream);
+        pipeline.start().await.expect("Failed to start pipeline");
+        pipelines.push((pipeline, sink));
+    }
+
+    let delivered = tokio::time::timeout(Duration::from_secs(30), async {
+        for (_, sink) in &pipelines {
+            while sink.events().await.is_empty() {
+                tokio::time::sleep(Duration::from_millis(200)).await;
+            }
+        }
+    })
+    .await;
+
+    for (pipeline, _) in &pipelines {
+        pipeline.shutdown();
+        pipeline.wait().await.expect("Pipeline should shut down");
+    }
+    assert!(
+        delivered.is_ok(),
+        "each stream should deliver the event written before the upgrade"
+    );
+
+    for (stream_config, (_, sink)) in stream_configs.iter().zip(&pipelines) {
+        let events = sink.events().await;
+        let [event] = events.as_slice() else {
+            panic!(
+                "stream {} should deliver exactly its own event: {events:?}",
+                stream_config.id
+            );
+        };
+        assert_eq!(
+            event.payload,
+            serde_json::json!({"stream": stream_config.id})
+        );
+        assert!(event.lsn.is_some(), "the event's lsn should be parsed");
+
+        let states: Vec<String> = sqlx::query_scalar(
+            "select state::text from etl.replication_state where pipeline_id = $1 and is_current",
+        )
+        .bind(stream_config.id as i64)
+        .fetch_all(&db.pool)
+        .await
+        .unwrap();
+        assert_eq!(states, vec!["ready".to_string()]);
+
+        let stored_schemas: i64 =
+            sqlx::query_scalar("select count(*) from etl.table_schemas where pipeline_id = $1")
+                .bind(stream_config.id as i64)
+                .fetch_one(&db.pool)
+                .await
+                .unwrap();
+        assert_eq!(stored_schemas, 1, "the old stored schema should be reused");
     }
 }
