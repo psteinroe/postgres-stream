@@ -18,6 +18,7 @@ use crate::{
         create_partition, drop_partition, fetch_event, fetch_events_table_id, fetch_stream_state,
         insert_stream_state, list_partitions, upsert_stream_maintenance, upsert_stream_status,
     },
+    slot_recovery::resolve_slot_recovery,
     types::{EventIdentifier, StreamStatus, TriggeredEvent},
 };
 
@@ -28,6 +29,8 @@ const NUM_POOL_CONNECTIONS: u32 = 1;
 struct StreamState {
     next_maintenance_at: DateTime<Utc>,
     status: StreamStatus,
+    /// Whether slot recovery left a replay lower bound to resolve on the next batch.
+    slot_recovery_pending: bool,
 }
 
 #[derive(Debug)]
@@ -56,6 +59,7 @@ impl<S: SchemaStore> StreamStore<S> {
         let mut state = StreamState {
             next_maintenance_at: DateTime::UNIX_EPOCH,
             status: StreamStatus::Healthy,
+            slot_recovery_pending: false,
         };
 
         let mut checkpoint_cache = None;
@@ -65,6 +69,7 @@ impl<S: SchemaStore> StreamStore<S> {
 
         if let Some(row) = maybe_row {
             state.next_maintenance_at = row.next_maintenance_at;
+            state.slot_recovery_pending = row.slot_recovery_lsn.is_some();
 
             if let (Some(event_id), Some(event_created_at)) = (row.event_id, row.event_created_at) {
                 let checkpoint_event_id = EventIdentifier::new(event_id, event_created_at);
@@ -151,6 +156,32 @@ impl<S: SchemaStore> StreamStore<S> {
         let mut state = self.state.write().await;
         state.status = status;
         Ok(())
+    }
+
+    /// Resolves the replay lower bound left by slot recovery into a failover checkpoint.
+    ///
+    /// Does nothing unless slot recovery ran before this store was created. Returns whether the
+    /// stream entered failover. See [`resolve_slot_recovery`].
+    pub async fn resolve_pending_slot_recovery(&self) -> EtlResult<bool> {
+        if !self.state.read().await.slot_recovery_pending {
+            return Ok(false);
+        }
+
+        let pool = Self::connect_temporary(&self.stream_config.pg_connection).await?;
+        let checkpoint = resolve_slot_recovery(&pool, self.stream_config.id).await?;
+
+        let mut state = self.state.write().await;
+        state.slot_recovery_pending = false;
+
+        let Some((event_id, event_created_at)) = checkpoint else {
+            return Ok(false);
+        };
+        let entered_failover = matches!(state.status, StreamStatus::Healthy);
+        state.status = StreamStatus::Failover {
+            checkpoint_event_id: EventIdentifier::new(event_id, event_created_at),
+        };
+
+        Ok(entered_failover)
     }
 
     /// Get checkpoint event from DB (with caching)

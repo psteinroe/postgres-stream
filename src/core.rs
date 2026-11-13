@@ -6,21 +6,25 @@ use crate::config::REPLICATION_OPTIONS;
 use crate::{
     config::{PipelineConfig, SinkConfig},
     migrations::migrate_etl,
-    queries::get_slot_state,
     sink::{AnySink, memory::MemorySink},
-    slot_recovery::handle_slot_recovery,
+    slot_guard::SlotGuardStore,
+    slot_recovery::{detect_slot_loss, handle_slot_recovery, record_slot_restart_lsn},
     stream::PgStream,
-    types::SlotName,
 };
 use etl::config::{IntoConnectOptions, TlsConfig};
 use etl::destination::PipelineDestination;
 use etl::error::{ErrorKind, EtlResult};
 use etl::pipeline::Pipeline;
 use etl::store::{PipelineStore, PostgresStore};
+use sqlx::PgPool;
 use sqlx::postgres::PgPoolOptions;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::signal::unix::{SignalKind, signal};
 use tracing::{error, info, warn};
+
+/// Interval at which the slot's `restart_lsn` is recorded for slot recovery.
+const SLOT_RESTART_LSN_RECORD_INTERVAL: Duration = Duration::from_secs(10);
 
 /// Starts the pipeline daemon with the provided configuration.
 ///
@@ -28,8 +32,9 @@ use tracing::{error, info, warn};
 /// and starts the ETL pipeline. Handles graceful shutdown via
 /// SIGTERM and SIGINT signals.
 ///
-/// If a replication slot is invalidated, this function will automatically
-/// recover by setting a failover checkpoint and restarting the pipeline.
+/// If the replication slot is lost (invalidated, or missing after the events table finished its
+/// initial sync), this function will automatically recover by setting a failover checkpoint and
+/// restarting the pipeline. See [`crate::slot_recovery`].
 pub async fn start_pipeline_with_config(config: PipelineConfig) -> EtlResult<()> {
     log_config(&config);
     validate_tls_config(&config.stream.pg_connection.tls)?;
@@ -37,49 +42,78 @@ pub async fn start_pipeline_with_config(config: PipelineConfig) -> EtlResult<()>
     // Run etl migrations before starting the pipeline
     migrate_etl(&config.stream.pg_connection).await?;
 
-    // Recovery loop - restarts the pipeline if slot is invalidated
+    let pool = PgPoolOptions::new()
+        .max_connections(2)
+        .connect_with(
+            config
+                .stream
+                .pg_connection
+                .with_db(Some(&REPLICATION_OPTIONS)),
+        )
+        .await?;
+
+    // Recovery loop - restarts the pipeline if the slot is lost
     loop {
-        let result = run_pipeline(&config).await;
+        recover_lost_slot(&pool, config.stream.id).await?;
+
+        let result = run_pipeline(&config, &pool).await;
 
         match result {
             Ok(()) => {
                 info!("pgstream daemon completed");
                 return Ok(());
             }
-            Err(e) => {
-                let pool = PgPoolOptions::new()
-                    .max_connections(1)
-                    .connect_with(
-                        config
-                            .stream
-                            .pg_connection
-                            .with_db(Some(&REPLICATION_OPTIONS)),
-                    )
-                    .await?;
-
-                let state = get_slot_state(&pool, &config.stream.id.slot_name()).await?;
-
-                if state.is_some_and(|s| s.is_invalidated()) {
-                    warn!(error = %e, "replication slot invalidated, attempting recovery");
-
-                    if let Err(recovery_err) = handle_slot_recovery(&pool, config.stream.id).await {
-                        error!(error = %recovery_err, "slot recovery failed");
-                        return Err(e);
-                    }
-                    // Loop continues to restart the pipeline
-                } else {
+            Err(e) => match detect_slot_loss(&pool, config.stream.id).await {
+                Ok(Some(loss)) => {
+                    warn!(error = %e, ?loss, "replication slot lost, attempting recovery");
+                    // Loop continues to recover the slot and restart the pipeline
+                }
+                Ok(None) => return Err(e),
+                Err(detect_err) => {
+                    error!(error = %detect_err, "failed to check replication slot state");
                     return Err(e);
                 }
-            }
+            },
+        }
+    }
+}
+
+/// Recovers the stream's replication slot if it was lost.
+///
+/// Runs before every pipeline start: etl would otherwise silently create a new slot at the
+/// current WAL position for a missing slot and skip every event committed in between.
+pub async fn recover_lost_slot(pool: &PgPool, stream_id: u64) -> EtlResult<()> {
+    let Some(loss) = detect_slot_loss(pool, stream_id).await? else {
+        return Ok(());
+    };
+
+    warn!(?loss, "replication slot lost, attempting recovery");
+    if let Err(recovery_err) = handle_slot_recovery(pool, stream_id).await {
+        error!(error = %recovery_err, "slot recovery failed");
+        return Err(recovery_err);
+    }
+
+    Ok(())
+}
+
+/// Periodically records the `restart_lsn` of the stream's slot for slot recovery.
+async fn record_slot_restart_lsn_periodically(pool: PgPool, stream_id: u64) {
+    let mut interval = tokio::time::interval(SLOT_RESTART_LSN_RECORD_INTERVAL);
+    loop {
+        interval.tick().await;
+        if let Err(err) = record_slot_restart_lsn(&pool, stream_id).await {
+            warn!(error = %err, "failed to record replication slot restart_lsn");
         }
     }
 }
 
 /// Runs the pipeline once. Returns when the pipeline completes or fails.
-async fn run_pipeline(config: &PipelineConfig) -> EtlResult<()> {
-    // Initialize state store for ETL pipeline state tracking
-    let state_store =
-        PostgresStore::new(config.stream.id, config.stream.pg_connection.clone()).await?;
+async fn run_pipeline(config: &PipelineConfig, pool: &PgPool) -> EtlResult<()> {
+    // Initialize state store for ETL pipeline state tracking. The guard turns a lost apply slot
+    // into a pipeline error instead of a silently replaced slot.
+    let state_store = SlotGuardStore::new(
+        PostgresStore::new(config.stream.id, config.stream.pg_connection.clone()).await?,
+    );
 
     // Create sink based on configuration.
     let sink = match &config.sink {
@@ -243,8 +277,17 @@ async fn run_pipeline(config: &PipelineConfig) -> EtlResult<()> {
     // Create ETL pipeline with PgStream as destination
     let pipeline = Pipeline::new(pipeline_config, state_store, pgstream_destination);
 
+    // Record the slot's restart_lsn while the pipeline runs
+    let recorder = tokio::spawn(record_slot_restart_lsn_periodically(
+        pool.clone(),
+        config.stream.id,
+    ));
+
     // Start the pipeline with signal handling
-    start_pipeline_with_shutdown(pipeline).await
+    let result = start_pipeline_with_shutdown(pipeline).await;
+    recorder.abort();
+
+    result
 }
 
 /// Rejects TLS without trusted root certificates.
