@@ -13,6 +13,7 @@ use tokio_postgres::types::ToSql;
 use tokio_postgres::{Client, Config, Connection, NoTls, Row, Socket};
 use tokio_rustls::rustls::{self, ClientConfig};
 use tracing::{Instrument, error, info};
+use uuid::Uuid;
 
 use crate::config::{REPLICATION_OPTIONS, STATE_MANAGEMENT_OPTIONS};
 use crate::types::{EventIdentifier, StreamId, TriggeredEvent};
@@ -181,7 +182,7 @@ impl ReplayClient {
             .copy_client
             .query_raw(
                 r#"
-                  select id::text as id, payload, metadata, stream_id, created_at, lsn::text as lsn
+                  select id, payload, metadata, stream_id, created_at, lsn
                   from pgstream.events
                   where (created_at, id) > ($1::timestamptz, $2::text::uuid)
                     and (created_at, id) < ($3::timestamptz, $4::text::uuid)
@@ -220,17 +221,16 @@ impl ReplayClient {
 
 /// Converts a row of the replay query into a [`TriggeredEvent`].
 fn event_from_row(row: &Row) -> EtlResult<TriggeredEvent> {
-    let id: String = row.try_get("id")?;
+    let id: Uuid = row.try_get("id")?;
     let created_at: DateTime<Utc> = row.try_get("created_at")?;
     let stream_id: i64 = row.try_get("stream_id")?;
-    let lsn: Option<String> = row.try_get("lsn")?;
 
     Ok(TriggeredEvent {
-        id: EventIdentifier::new(id, created_at),
+        id: EventIdentifier::new(id.to_string(), created_at),
         payload: row.try_get("payload")?,
         metadata: row.try_get("metadata")?,
         stream_id: StreamId::from(stream_id as u64),
         commit_lsn: None,
-        lsn: lsn.and_then(|lsn| lsn.parse().ok()),
+        lsn: row.try_get("lsn")?,
     })
 }

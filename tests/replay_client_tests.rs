@@ -201,7 +201,6 @@ async fn test_get_events_stream_with_events() {
         .await
         .expect("Failed to get events stream");
 
-    // Wrap with TableCopyStream to parse the COPY protocol
     use futures::StreamExt;
     use tokio::pin;
     pin!(stream);
@@ -217,11 +216,15 @@ async fn test_get_events_stream_with_events() {
         3,
         "Should have received exactly 3 events"
     );
-    assert!(
-        replayed_events
-            .iter()
-            .all(|event| event.lsn.is_some() && event.commit_lsn.is_none())
-    );
+    let expected_ids = events.get(1..4).unwrap().to_vec();
+    let replayed_ids: Vec<_> = replayed_events
+        .iter()
+        .map(|event| event.id.clone())
+        .collect();
+    assert_eq!(replayed_ids, expected_ids);
+    assert!(replayed_events.iter().all(|event| {
+        event.lsn == Some("0/100".parse().unwrap()) && event.commit_lsn.is_none()
+    }));
 }
 
 #[tokio::test(flavor = "multi_thread")]
